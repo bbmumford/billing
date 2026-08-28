@@ -1,0 +1,322 @@
+package billing
+
+import (
+	"context"
+	"database/sql"
+	"time"
+)
+
+// ── Invoices ──
+
+const invoiceCols = `id, owner, customer_id, subscription_id, provider_ref, number, status, currency,
+	amount_due_cents, amount_paid_cents, created_at, due_at, paid_at`
+
+func scanInvoice(sc interface{ Scan(...any) error }) (*Invoice, error) {
+	var inv Invoice
+	var created int64
+	var due, paid sql.NullInt64
+	if err := sc.Scan(&inv.ID, &inv.Owner, &inv.CustomerID, &inv.SubscriptionID, &inv.ProviderRef,
+		&inv.Number, &inv.Status, &inv.Currency, &inv.AmountDueCents, &inv.AmountPaidCents,
+		&created, &due, &paid); err != nil {
+		return nil, err
+	}
+	inv.CreatedAt = fromNanos(created)
+	inv.DueAt = fromNullNanos(due)
+	inv.PaidAt = fromNullNanos(paid)
+	return &inv, nil
+}
+
+func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*InvoiceItem) error {
+	if inv.ID == "" {
+		inv.ID = randomID()
+	}
+	if inv.CreatedAt.IsZero() {
+		inv.CreatedAt = time.Now()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_invoices (`+invoiceCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		inv.ID, inv.Owner, inv.CustomerID, inv.SubscriptionID, inv.ProviderRef, inv.Number, inv.Status,
+		inv.Currency, inv.AmountDueCents, inv.AmountPaidCents, tnanos(inv.CreatedAt), ptrNanos(inv.DueAt),
+		ptrNanos(inv.PaidAt)); err != nil {
+		return err
+	}
+	for _, it := range items {
+		if it.ID == "" {
+			it.ID = randomID()
+		}
+		it.InvoiceID = inv.ID
+		if _, err := tx.ExecContext(ctx, `INSERT INTO billing_invoice_items
+			(id, invoice_id, product_id, description, quantity, unit_amount_cents, amount_cents, metadata)
+			VALUES (?,?,?,?,?,?,?,?)`,
+			it.ID, it.InvoiceID, it.ProductID, it.Description, it.Quantity, it.UnitAmountCents,
+			it.AmountCents, jsonMap(it.Metadata)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLStore) GetInvoice(ctx context.Context, owner, id string) (*Invoice, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
+		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+	inv, err := scanInvoice(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return inv, err
+}
+
+func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, owner, customerID string) ([]*Invoice, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
+		WHERE (? = '' OR owner = ?) AND customer_id = ? ORDER BY created_at DESC`, owner, owner, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Invoice
+	for rows.Next() {
+		inv, err := scanInvoice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ListInvoiceItems(ctx context.Context, invoiceID string) ([]*InvoiceItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, invoice_id, product_id, description, quantity,
+		unit_amount_cents, amount_cents, metadata FROM billing_invoice_items WHERE invoice_id = ?`, invoiceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*InvoiceItem
+	for rows.Next() {
+		var it InvoiceItem
+		var meta string
+		if err := rows.Scan(&it.ID, &it.InvoiceID, &it.ProductID, &it.Description, &it.Quantity,
+			&it.UnitAmountCents, &it.AmountCents, &meta); err != nil {
+			return nil, err
+		}
+		it.Metadata = readMap(meta)
+		out = append(out, &it)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, owner, id, status string, amountPaidCents int64) error {
+	set := `status = ?, amount_paid_cents = ?`
+	args := []any{status, amountPaidCents}
+	if status == "paid" {
+		set += `, paid_at = COALESCE(paid_at, ?)`
+		args = append(args, time.Now().UnixNano())
+	}
+	args = append(args, id, owner, owner)
+	res, err := s.db.ExecContext(ctx, `UPDATE billing_invoices SET `+set+`
+		WHERE id = ? AND (? = '' OR owner = ?)`, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ── Payment ledger ──
+
+const paymentCols = `idempotency_key, owner, customer_id, payment_intent_ref, status, amount_cents,
+	currency, charge_ref_sealed, client_secret_sealed, created_at, updated_at`
+
+func scanPayment(sc interface{ Scan(...any) error }) (*PaymentLedgerRow, error) {
+	var r PaymentLedgerRow
+	var created, updated int64
+	if err := sc.Scan(&r.IdempotencyKey, &r.Owner, &r.CustomerID, &r.PaymentIntentRef, &r.Status,
+		&r.AmountCents, &r.Currency, &r.ChargeRefSealed, &r.ClientSecretSealed, &created, &updated); err != nil {
+		return nil, err
+	}
+	r.CreatedAt = fromNanos(created)
+	r.UpdatedAt = fromNanos(updated)
+	return &r, nil
+}
+
+func (s *SQLStore) RecordPayment(ctx context.Context, row *PaymentLedgerRow) (*PaymentLedgerRow, error) {
+	now := time.Now()
+	if row.CreatedAt.IsZero() {
+		row.CreatedAt = now
+	}
+	row.UpdatedAt = now
+	// Idempotent insert: on a duplicate key, insert nothing and return the existing row so a retry never
+	// double-records a payment. The check + insert run in one transaction (driver-agnostic).
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	existing, gerr := scanPayment(tx.QueryRowContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
+		WHERE idempotency_key = ?`, row.IdempotencyKey))
+	if gerr == nil {
+		return existing, nil
+	}
+	if gerr != sql.ErrNoRows {
+		return nil, gerr
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_payments (`+paymentCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		row.IdempotencyKey, row.Owner, row.CustomerID, row.PaymentIntentRef, row.Status, row.AmountCents,
+		row.Currency, row.ChargeRefSealed, row.ClientSecretSealed, tnanos(row.CreatedAt), tnanos(row.UpdatedAt)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func (s *SQLStore) GetPaymentByKey(ctx context.Context, idempotencyKey string) (*PaymentLedgerRow, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
+		WHERE idempotency_key = ?`, idempotencyKey)
+	r, err := scanPayment(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return r, err
+}
+
+func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, idempotencyKey, status, chargeRefSealed string) error {
+	set := `status = ?, updated_at = ?`
+	args := []any{status, time.Now().UnixNano()}
+	if chargeRefSealed != "" {
+		set += `, charge_ref_sealed = ?`
+		args = append(args, chargeRefSealed)
+	}
+	args = append(args, idempotencyKey)
+	res, err := s.db.ExecContext(ctx, `UPDATE billing_payments SET `+set+` WHERE idempotency_key = ?`, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, owner, customerID string) ([]*PaymentLedgerRow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
+		WHERE (? = '' OR owner = ?) AND customer_id = ? ORDER BY created_at DESC`, owner, owner, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*PaymentLedgerRow
+	for rows.Next() {
+		r, err := scanPayment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ── Usage ──
+
+func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
+	if u.ID == "" {
+		u.ID = randomID()
+	}
+	if u.RecordedAt.IsZero() {
+		u.RecordedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
+		(id, owner, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+		u.ID, u.Owner, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
+	return err
+}
+
+func (s *SQLStore) SummarizeUsage(ctx context.Context, owner, customerID string, from, to time.Time) ([]*UsageSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT product_id, SUM(quantity), MAX(quantity)
+		FROM billing_usage WHERE (? = '' OR owner = ?) AND customer_id = ?
+		AND recorded_at >= ? AND recorded_at < ? GROUP BY product_id ORDER BY product_id ASC`,
+		owner, owner, customerID, from.UnixNano(), to.UnixNano())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*UsageSummary
+	for rows.Next() {
+		var su UsageSummary
+		if err := rows.Scan(&su.ProductID, &su.TotalQuantity, &su.PeakQuantity); err != nil {
+			return nil, err
+		}
+		out = append(out, &su)
+	}
+	return out, rows.Err()
+}
+
+// ── Credits ──
+
+func (s *SQLStore) GrantCredit(ctx context.Context, c *Credit) error {
+	if c.ID == "" {
+		c.ID = randomID()
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_credits
+		(id, owner, customer_id, amount_cents, currency, reason, created_at, expires_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		c.ID, c.Owner, c.CustomerID, c.AmountCents, c.Currency, c.Reason, tnanos(c.CreatedAt), ptrNanos(c.ExpiresAt))
+	return err
+}
+
+func (s *SQLStore) ListCredits(ctx context.Context, owner, customerID string) ([]*Credit, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, owner, customer_id, amount_cents, currency, reason,
+		created_at, expires_at FROM billing_credits WHERE (? = '' OR owner = ?) AND customer_id = ?
+		ORDER BY created_at DESC`, owner, owner, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Credit
+	for rows.Next() {
+		var c Credit
+		var created int64
+		var expires sql.NullInt64
+		if err := rows.Scan(&c.ID, &c.Owner, &c.CustomerID, &c.AmountCents, &c.Currency, &c.Reason,
+			&created, &expires); err != nil {
+			return nil, err
+		}
+		c.CreatedAt = fromNanos(created)
+		c.ExpiresAt = fromNullNanos(expires)
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) CreditBalance(ctx context.Context, owner, customerID string, now time.Time) (map[string]int64, error) {
+	// A credit counts unless it has expired (expires_at <= now). NULL expiry never expires.
+	rows, err := s.db.QueryContext(ctx, `SELECT currency, SUM(amount_cents) FROM billing_credits
+		WHERE (? = '' OR owner = ?) AND customer_id = ? AND (expires_at IS NULL OR expires_at > ?)
+		GROUP BY currency`, owner, owner, customerID, now.UnixNano())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bal := map[string]int64{}
+	for rows.Next() {
+		var cur string
+		var sum int64
+		if err := rows.Scan(&cur, &sum); err != nil {
+			return nil, err
+		}
+		bal[cur] = sum
+	}
+	return bal, rows.Err()
+}

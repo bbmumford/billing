@@ -57,63 +57,63 @@ func TestService_RequiresSeams(t *testing.T) {
 }
 
 func TestService_EnsureCustomerSetsProviderRef(t *testing.T) {
-	m := NewMemStore()
-	s := newService(t, m, &fakeProvider{})
-	c := &Customer{Owner: "acme", UserID: "u1", BillingEmail: "a@x"}
-	got, err := s.EnsureCustomer(ctx, c)
-	if err != nil || got.ProviderRef != "cus_u1" {
-		t.Fatalf("ensure: %+v %v", got, err)
-	}
-	// persisted with the provider ref
-	stored, _ := m.GetCustomer(ctx, "acme", got.ID)
-	if stored.ProviderRef != "cus_u1" {
-		t.Fatalf("provider ref not persisted: %+v", stored)
-	}
+	eachStore(t, func(t *testing.T, store Store) {
+		s := newService(t, store, &fakeProvider{})
+		c := &Customer{Owner: "acme", UserID: "u1", BillingEmail: "a@x"}
+		got, err := s.EnsureCustomer(ctx, c)
+		if err != nil || got.ProviderRef != "cus_u1" {
+			t.Fatalf("ensure: %+v %v", got, err)
+		}
+		stored, _ := store.GetCustomer(ctx, "acme", got.ID)
+		if stored.ProviderRef != "cus_u1" {
+			t.Fatalf("provider ref not persisted: %+v", stored)
+		}
+	})
 }
 
 func TestService_ChargeSealsSecretIdempotentlyAndReveals(t *testing.T) {
-	m := NewMemStore()
-	prov := &fakeProvider{}
-	s := newService(t, m, prov)
-	req := ChargeRequest{Owner: "acme", CustomerID: "c1", CustomerRef: "cus_1", AmountCents: 500, Currency: "usd", IdempotencyKey: "idem-1"}
-	row, secret, err := s.Charge(ctx, req)
-	if err != nil || secret != "secret-xyz" {
-		t.Fatalf("charge: secret=%q err=%v", secret, err)
-	}
-	// the store holds only the SEALED secret, never the plaintext
-	stored, _ := m.GetPaymentByKey(ctx, "idem-1")
-	if stored.ClientSecretSealed == "secret-xyz" || stored.ClientSecretSealed != "enc:secret-xyz" {
-		t.Fatalf("client secret must be sealed at rest; got %q", stored.ClientSecretSealed)
-	}
-	if stored.ChargeRefSealed != "enc:ch_1" {
-		t.Fatalf("charge ref must be sealed; got %q", stored.ChargeRefSealed)
-	}
-	// a retry with the same key does NOT create a second provider intent and returns the revealed secret
-	row2, secret2, err := s.Charge(ctx, req)
-	if err != nil || secret2 != "secret-xyz" || row2.IdempotencyKey != row.IdempotencyKey {
-		t.Fatalf("idempotent retry: secret=%q err=%v", secret2, err)
-	}
-	if prov.intents != 1 {
-		t.Fatalf("provider must be called exactly once across retries; got %d", prov.intents)
-	}
-	// reveal the sealed charge ref just-in-time
-	if cr, _ := s.RevealChargeRef(stored); cr != "ch_1" {
-		t.Fatalf("RevealChargeRef: got %q want ch_1", cr)
-	}
-	// a non-positive amount is rejected before any provider call
-	if _, _, err := s.Charge(ctx, ChargeRequest{IdempotencyKey: "idem-2", AmountCents: 0}); !errors.Is(err, ErrAmountInvalid) {
-		t.Fatal("a non-positive amount must be ErrAmountInvalid")
-	}
+	eachStore(t, func(t *testing.T, store Store) {
+		prov := &fakeProvider{}
+		s := newService(t, store, prov)
+		req := ChargeRequest{Owner: "acme", CustomerID: "c1", CustomerRef: "cus_1", AmountCents: 500, Currency: "usd", IdempotencyKey: "idem-1"}
+		row, secret, err := s.Charge(ctx, req)
+		if err != nil || secret != "secret-xyz" {
+			t.Fatalf("charge: secret=%q err=%v", secret, err)
+		}
+		// the store holds only the SEALED secret, never the plaintext
+		stored, _ := store.GetPaymentByKey(ctx, "idem-1")
+		if stored.ClientSecretSealed == "secret-xyz" || stored.ClientSecretSealed != "enc:secret-xyz" {
+			t.Fatalf("client secret must be sealed at rest; got %q", stored.ClientSecretSealed)
+		}
+		if stored.ChargeRefSealed != "enc:ch_1" {
+			t.Fatalf("charge ref must be sealed; got %q", stored.ChargeRefSealed)
+		}
+		// a retry with the same key does NOT create a second provider intent and returns the revealed secret
+		row2, secret2, err := s.Charge(ctx, req)
+		if err != nil || secret2 != "secret-xyz" || row2.IdempotencyKey != row.IdempotencyKey {
+			t.Fatalf("idempotent retry: secret=%q err=%v", secret2, err)
+		}
+		if prov.intents != 1 {
+			t.Fatalf("provider must be called exactly once across retries; got %d", prov.intents)
+		}
+		if cr, _ := s.RevealChargeRef(stored); cr != "ch_1" {
+			t.Fatalf("RevealChargeRef: got %q want ch_1", cr)
+		}
+		if _, _, err := s.Charge(ctx, ChargeRequest{IdempotencyKey: "idem-2", AmountCents: 0}); !errors.Is(err, ErrAmountInvalid) {
+			t.Fatal("a non-positive amount must be ErrAmountInvalid")
+		}
+	})
 }
 
 func TestService_SubscribePersistsFromProvider(t *testing.T) {
-	m := NewMemStore()
-	s := newService(t, m, &fakeProvider{})
-	sub, err := s.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 2)
-	if err != nil || sub.ProviderRef != "sub_1" || sub.Status != "active" || sub.Quantity != 2 {
-		t.Fatalf("subscribe: %+v %v", sub, err)
-	}
-	if got, _ := m.GetSubscription(ctx, "acme", sub.ID); got == nil || got.Status != "active" {
-		t.Fatal("subscription must persist from the provider result")
-	}
+	eachStore(t, func(t *testing.T, store Store) {
+		s := newService(t, store, &fakeProvider{})
+		sub, err := s.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 2)
+		if err != nil || sub.ProviderRef != "sub_1" || sub.Status != "active" || sub.Quantity != 2 {
+			t.Fatalf("subscribe: %+v %v", sub, err)
+		}
+		if got, _ := store.GetSubscription(ctx, "acme", sub.ID); got == nil || got.Status != "active" {
+			t.Fatal("subscription must persist from the provider result")
+		}
+	})
 }
