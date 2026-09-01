@@ -71,7 +71,7 @@ func (e *configError) Error() string { return e.msg }
 // Service orchestrates the neutral store, the pluggable PaymentProvider, and the Encryptor: it ensures
 // provider customers, creates charges (sealing the client secret + charge ref at rest and recording the
 // ledger idempotently), reveals those secrets just-in-time, and creates/cancels subscriptions. It
-// interprets no axis — Owner and all ids are opaque.
+// interprets no axis — Partition and all ids are opaque.
 type Service struct {
 	store    Store
 	provider PaymentProvider
@@ -119,7 +119,7 @@ func (s *Service) EnsureCustomer(ctx context.Context, c *Customer) (*Customer, e
 		if err != nil {
 			return nil, err
 		}
-		if err := s.store.SetCustomerProviderRef(ctx, c.Owner, c.ID, ref); err != nil {
+		if err := s.store.SetCustomerProviderRef(ctx, c.Partition, c.ID, ref); err != nil {
 			return nil, err
 		}
 		c.ProviderRef = ref
@@ -129,7 +129,7 @@ func (s *Service) EnsureCustomer(ctx context.Context, c *Customer) (*Customer, e
 
 // ChargeRequest describes a charge to create against a customer.
 type ChargeRequest struct {
-	Owner          string
+	Partition          string
 	CustomerID     string
 	CustomerRef    string // opaque provider customer id
 	AmountCents    int64
@@ -181,7 +181,7 @@ func (s *Service) Charge(ctx context.Context, req ChargeRequest) (row *PaymentLe
 	}
 	row = &PaymentLedgerRow{
 		IdempotencyKey:     req.IdempotencyKey,
-		Owner:              req.Owner,
+		Partition:              req.Partition,
 		CustomerID:         req.CustomerID,
 		PaymentIntentRef:   res.IntentRef,
 		Status:             res.Status,
@@ -210,7 +210,7 @@ func (s *Service) RevealChargeRef(row *PaymentLedgerRow) (string, error) {
 }
 
 // Subscribe creates a provider subscription and persists the local Subscription record from the result.
-func (s *Service) Subscribe(ctx context.Context, owner, customerID, customerRef, priceID, priceRef string, quantity int64) (*Subscription, error) {
+func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64) (*Subscription, error) {
 	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity})
 	if err != nil {
 		return nil, err
@@ -219,7 +219,7 @@ func (s *Service) Subscribe(ctx context.Context, owner, customerID, customerRef,
 		return nil, ErrInvalidSubscriptionStatus
 	}
 	sub := &Subscription{
-		Owner:              owner,
+		Partition:              partition,
 		CustomerID:         customerID,
 		PriceID:            priceID,
 		ProviderRef:        res.ProviderRef,

@@ -12,14 +12,14 @@ var ctx = context.Background()
 // at is a fixed base time; cases add explicit offsets where ordering/expiry matters.
 var at = time.Unix(1_000_000, 0).UTC()
 
-func TestCustomer_CreateGetOwnerScopeAndProviderRef(t *testing.T) {
+func TestCustomer_CreateGetPartitionScopeAndProviderRef(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		c := &Customer{Owner: "acme", UserID: "u1", BillingEmail: "a@x", Currency: "usd"}
+		c := &Customer{Partition: "acme", UserID: "u1", BillingEmail: "a@x", Currency: "usd"}
 		if err := s.CreateCustomer(ctx, c); err != nil || c.ID == "" {
 			t.Fatalf("create: %v", err)
 		}
 		if _, err := s.GetCustomer(ctx, "globex", c.ID); !errors.Is(err, ErrNotFound) {
-			t.Fatal("a different owner must not see the customer")
+			t.Fatal("a different partition must not see the customer")
 		}
 		if err := s.SetCustomerProviderRef(ctx, "acme", c.ID, "cus_123"); err != nil {
 			t.Fatal(err)
@@ -39,7 +39,7 @@ func TestSubscription_StatusValidationAndUpdate(t *testing.T) {
 		t.Fatal("status validation set is wrong")
 	}
 	eachStore(t, func(t *testing.T, s Store) {
-		sub := &Subscription{Owner: "acme", CustomerID: "c1", PriceID: "p1", Status: "active", Quantity: 2}
+		sub := &Subscription{Partition: "acme", CustomerID: "c1", PriceID: "p1", Status: "active", Quantity: 2}
 		s.CreateSubscription(ctx, sub)
 		sub.Status = "downgrade_pending"
 		if err := s.UpdateSubscription(ctx, sub); err != nil {
@@ -57,7 +57,7 @@ func TestSubscription_StatusValidationAndUpdate(t *testing.T) {
 
 func TestInvoice_WithItemsAndPaidStatus(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		inv := &Invoice{Owner: "acme", CustomerID: "c1", Currency: "usd", Status: "open", AmountDueCents: 3000}
+		inv := &Invoice{Partition: "acme", CustomerID: "c1", Currency: "usd", Status: "open", AmountDueCents: 3000}
 		items := []*InvoiceItem{
 			{ProductID: "prod1", Description: "seat", Quantity: 3, UnitAmountCents: 1000, AmountCents: ComputeItemAmount(3, 1000)},
 		}
@@ -80,12 +80,12 @@ func TestInvoice_WithItemsAndPaidStatus(t *testing.T) {
 
 func TestPaymentLedger_IdempotentRecordAndStatus(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		row := &PaymentLedgerRow{IdempotencyKey: "idem-1", Owner: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", Status: "pending", ClientSecretSealed: "sealed"}
+		row := &PaymentLedgerRow{IdempotencyKey: "idem-1", Partition: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", Status: "pending", ClientSecretSealed: "sealed"}
 		existing, err := s.RecordPayment(ctx, row)
 		if err != nil || existing != nil {
 			t.Fatalf("first record must insert (existing nil); got existing=%v err=%v", existing, err)
 		}
-		dup, err := s.RecordPayment(ctx, &PaymentLedgerRow{IdempotencyKey: "idem-1", Owner: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", Status: "pending"})
+		dup, err := s.RecordPayment(ctx, &PaymentLedgerRow{IdempotencyKey: "idem-1", Partition: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", Status: "pending"})
 		if err != nil || dup == nil {
 			t.Fatalf("retry must return the existing row; got dup=%v err=%v", dup, err)
 		}
@@ -105,10 +105,10 @@ func TestPaymentLedger_IdempotentRecordAndStatus(t *testing.T) {
 func TestUsage_SummarizeWindow(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		for i, q := range []int64{5, 10, 3} {
-			s.RecordUsage(ctx, &UsageRecord{Owner: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)})
+			s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)})
 		}
 		// one record outside the window must not count
-		s.RecordUsage(ctx, &UsageRecord{Owner: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)})
+		s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)})
 		sum, _ := s.SummarizeUsage(ctx, "acme", "c1", at, at.Add(10*time.Minute))
 		if len(sum) != 1 || sum[0].TotalQuantity != 18 || sum[0].PeakQuantity != 10 {
 			t.Fatalf("summary: %+v", sum)
@@ -119,11 +119,11 @@ func TestUsage_SummarizeWindow(t *testing.T) {
 func TestCredit_BalanceExcludesExpired(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		now := at
-		s.GrantCredit(ctx, &Credit{Owner: "acme", CustomerID: "c1", AmountCents: 1000, Currency: "usd"})
+		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 1000, Currency: "usd"})
 		exp := now.Add(-time.Hour)
-		s.GrantCredit(ctx, &Credit{Owner: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", ExpiresAt: &exp})
+		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", ExpiresAt: &exp})
 		future := now.Add(time.Hour)
-		s.GrantCredit(ctx, &Credit{Owner: "acme", CustomerID: "c1", AmountCents: 200, Currency: "eur", ExpiresAt: &future})
+		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 200, Currency: "eur", ExpiresAt: &future})
 		bal, _ := s.CreditBalance(ctx, "acme", "c1", now)
 		if bal["usd"] != 1000 || bal["eur"] != 200 {
 			t.Fatalf("balance must exclude the expired usd credit; got %+v", bal)

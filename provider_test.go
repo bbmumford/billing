@@ -59,7 +59,7 @@ func TestService_RequiresSeams(t *testing.T) {
 func TestService_EnsureCustomerSetsProviderRef(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		s := newService(t, store, &fakeProvider{})
-		c := &Customer{Owner: "acme", UserID: "u1", BillingEmail: "a@x"}
+		c := &Customer{Partition: "acme", UserID: "u1", BillingEmail: "a@x"}
 		got, err := s.EnsureCustomer(ctx, c)
 		if err != nil || got.ProviderRef != "cus_u1" {
 			t.Fatalf("ensure: %+v %v", got, err)
@@ -75,7 +75,7 @@ func TestService_ChargeSealsSecretIdempotentlyAndReveals(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		prov := &fakeProvider{}
 		s := newService(t, store, prov)
-		req := ChargeRequest{Owner: "acme", CustomerID: "c1", CustomerRef: "cus_1", AmountCents: 500, Currency: "usd", IdempotencyKey: "idem-1"}
+		req := ChargeRequest{Partition: "acme", CustomerID: "c1", CustomerRef: "cus_1", AmountCents: 500, Currency: "usd", IdempotencyKey: "idem-1"}
 		row, secret, err := s.Charge(ctx, req)
 		if err != nil || secret != "secret-xyz" {
 			t.Fatalf("charge: secret=%q err=%v", secret, err)

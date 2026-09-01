@@ -10,8 +10,8 @@ import (
 )
 
 // MemStore is the in-memory reference Store — the test/dev backend and the semantic reference a durable
-// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Owner is opaque; "" on an
-// owner-scoped read means any owner.
+// (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on an
+// partition-scoped read means any partition.
 type MemStore struct {
 	mu            sync.Mutex
 	customers     map[string]*Customer
@@ -47,7 +47,7 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
-func ownerMatch(want, have string) bool { return want == "" || want == have }
+func partitionMatch(want, have string) bool { return want == "" || want == have }
 
 // ── Customers ──
 
@@ -66,11 +66,11 @@ func (m *MemStore) CreateCustomer(_ context.Context, c *Customer) error {
 	return nil
 }
 
-func (m *MemStore) GetCustomer(_ context.Context, owner, id string) (*Customer, error) {
+func (m *MemStore) GetCustomer(_ context.Context, partition, id string) (*Customer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c, ok := m.customers[id]
-	if !ok || !ownerMatch(owner, c.Owner) {
+	if !ok || !partitionMatch(partition, c.Partition) {
 		return nil, ErrNotFound
 	}
 	return cloneCustomer(c), nil
@@ -90,22 +90,22 @@ func (m *MemStore) GetCustomerByProviderRef(_ context.Context, providerRef strin
 	return nil, ErrNotFound
 }
 
-func (m *MemStore) GetCustomerByUser(_ context.Context, owner, userID string) (*Customer, error) {
+func (m *MemStore) GetCustomerByUser(_ context.Context, partition, userID string) (*Customer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, c := range m.customers {
-		if ownerMatch(owner, c.Owner) && c.UserID == userID {
+		if partitionMatch(partition, c.Partition) && c.UserID == userID {
 			return cloneCustomer(c), nil
 		}
 	}
 	return nil, ErrNotFound
 }
 
-func (m *MemStore) SetCustomerProviderRef(_ context.Context, owner, id, providerRef string) error {
+func (m *MemStore) SetCustomerProviderRef(_ context.Context, partition, id, providerRef string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c, ok := m.customers[id]
-	if !ok || !ownerMatch(owner, c.Owner) {
+	if !ok || !partitionMatch(partition, c.Partition) {
 		return ErrNotFound
 	}
 	c.ProviderRef = providerRef
@@ -117,7 +117,7 @@ func (m *MemStore) UpdateCustomer(_ context.Context, c *Customer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.customers[c.ID]
-	if !ok || !ownerMatch(c.Owner, e.Owner) {
+	if !ok || !partitionMatch(c.Partition, e.Partition) {
 		return ErrNotFound
 	}
 	upd := cloneCustomer(c)
@@ -145,23 +145,23 @@ func (m *MemStore) CreateProduct(_ context.Context, p *Product) error {
 	return nil
 }
 
-func (m *MemStore) GetProduct(_ context.Context, owner, id string) (*Product, error) {
+func (m *MemStore) GetProduct(_ context.Context, partition, id string) (*Product, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.products[id]
-	if !ok || !ownerMatch(owner, p.Owner) {
+	if !ok || !partitionMatch(partition, p.Partition) {
 		return nil, ErrNotFound
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (m *MemStore) ListProducts(_ context.Context, owner string, activeOnly bool) ([]*Product, error) {
+func (m *MemStore) ListProducts(_ context.Context, partition string, activeOnly bool) ([]*Product, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Product
 	for _, p := range m.products {
-		if ownerMatch(owner, p.Owner) && (!activeOnly || p.Active) {
+		if partitionMatch(partition, p.Partition) && (!activeOnly || p.Active) {
 			cp := *p
 			out = append(out, &cp)
 		}
@@ -184,23 +184,23 @@ func (m *MemStore) CreatePrice(_ context.Context, p *Price) error {
 	return nil
 }
 
-func (m *MemStore) GetPrice(_ context.Context, owner, id string) (*Price, error) {
+func (m *MemStore) GetPrice(_ context.Context, partition, id string) (*Price, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.prices[id]
-	if !ok || !ownerMatch(owner, p.Owner) {
+	if !ok || !partitionMatch(partition, p.Partition) {
 		return nil, ErrNotFound
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (m *MemStore) ListPrices(_ context.Context, owner, productID string) ([]*Price, error) {
+func (m *MemStore) ListPrices(_ context.Context, partition, productID string) ([]*Price, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Price
 	for _, p := range m.prices {
-		if ownerMatch(owner, p.Owner) && p.ProductID == productID {
+		if partitionMatch(partition, p.Partition) && p.ProductID == productID {
 			cp := *p
 			out = append(out, &cp)
 		}
@@ -209,11 +209,11 @@ func (m *MemStore) ListPrices(_ context.Context, owner, productID string) ([]*Pr
 	return out, nil
 }
 
-func (m *MemStore) SetPriceProviderRef(_ context.Context, owner, id, providerRef string) error {
+func (m *MemStore) SetPriceProviderRef(_ context.Context, partition, id, providerRef string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.prices[id]
-	if !ok || !ownerMatch(owner, p.Owner) {
+	if !ok || !partitionMatch(partition, p.Partition) {
 		return ErrNotFound
 	}
 	p.ProviderRef = providerRef
@@ -237,22 +237,22 @@ func (m *MemStore) CreateSubscription(_ context.Context, s *Subscription) error 
 	return nil
 }
 
-func (m *MemStore) GetSubscription(_ context.Context, owner, id string) (*Subscription, error) {
+func (m *MemStore) GetSubscription(_ context.Context, partition, id string) (*Subscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.subscriptions[id]
-	if !ok || !ownerMatch(owner, s.Owner) {
+	if !ok || !partitionMatch(partition, s.Partition) {
 		return nil, ErrNotFound
 	}
 	return cloneSubscription(s), nil
 }
 
-func (m *MemStore) ListSubscriptionsByCustomer(_ context.Context, owner, customerID string) ([]*Subscription, error) {
+func (m *MemStore) ListSubscriptionsByCustomer(_ context.Context, partition, customerID string) ([]*Subscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Subscription
 	for _, s := range m.subscriptions {
-		if ownerMatch(owner, s.Owner) && s.CustomerID == customerID {
+		if partitionMatch(partition, s.Partition) && s.CustomerID == customerID {
 			out = append(out, cloneSubscription(s))
 		}
 	}
@@ -264,7 +264,7 @@ func (m *MemStore) UpdateSubscription(_ context.Context, s *Subscription) error 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.subscriptions[s.ID]
-	if !ok || !ownerMatch(s.Owner, e.Owner) {
+	if !ok || !partitionMatch(s.Partition, e.Partition) {
 		return ErrNotFound
 	}
 	upd := cloneSubscription(s)
@@ -296,22 +296,22 @@ func (m *MemStore) CreateInvoice(_ context.Context, inv *Invoice, items []*Invoi
 	return nil
 }
 
-func (m *MemStore) GetInvoice(_ context.Context, owner, id string) (*Invoice, error) {
+func (m *MemStore) GetInvoice(_ context.Context, partition, id string) (*Invoice, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, ok := m.invoices[id]
-	if !ok || !ownerMatch(owner, inv.Owner) {
+	if !ok || !partitionMatch(partition, inv.Partition) {
 		return nil, ErrNotFound
 	}
 	return cloneInvoice(inv), nil
 }
 
-func (m *MemStore) ListInvoicesByCustomer(_ context.Context, owner, customerID string) ([]*Invoice, error) {
+func (m *MemStore) ListInvoicesByCustomer(_ context.Context, partition, customerID string) ([]*Invoice, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Invoice
 	for _, inv := range m.invoices {
-		if ownerMatch(owner, inv.Owner) && inv.CustomerID == customerID {
+		if partitionMatch(partition, inv.Partition) && inv.CustomerID == customerID {
 			out = append(out, cloneInvoice(inv))
 		}
 	}
@@ -331,11 +331,11 @@ func (m *MemStore) ListInvoiceItems(_ context.Context, invoiceID string) ([]*Inv
 	return out, nil
 }
 
-func (m *MemStore) UpdateInvoiceStatus(_ context.Context, owner, id, status string, amountPaidCents int64) error {
+func (m *MemStore) UpdateInvoiceStatus(_ context.Context, partition, id, status string, amountPaidCents int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inv, ok := m.invoices[id]
-	if !ok || !ownerMatch(owner, inv.Owner) {
+	if !ok || !partitionMatch(partition, inv.Partition) {
 		return ErrNotFound
 	}
 	inv.Status = status
@@ -389,12 +389,12 @@ func (m *MemStore) UpdatePaymentStatus(_ context.Context, idempotencyKey, status
 	return nil
 }
 
-func (m *MemStore) ListPaymentsByCustomer(_ context.Context, owner, customerID string) ([]*PaymentLedgerRow, error) {
+func (m *MemStore) ListPaymentsByCustomer(_ context.Context, partition, customerID string) ([]*PaymentLedgerRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*PaymentLedgerRow
 	for _, row := range m.payments {
-		if ownerMatch(owner, row.Owner) && row.CustomerID == customerID {
+		if partitionMatch(partition, row.Partition) && row.CustomerID == customerID {
 			out = append(out, clonePayment(row))
 		}
 	}
@@ -417,12 +417,12 @@ func (m *MemStore) RecordUsage(_ context.Context, u *UsageRecord) error {
 	return nil
 }
 
-func (m *MemStore) SummarizeUsage(_ context.Context, owner, customerID string, from, to time.Time) ([]*UsageSummary, error) {
+func (m *MemStore) SummarizeUsage(_ context.Context, partition, customerID string, from, to time.Time) ([]*UsageSummary, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	byProduct := map[string]*UsageSummary{}
 	for _, u := range m.usage {
-		if !ownerMatch(owner, u.Owner) || u.CustomerID != customerID {
+		if !partitionMatch(partition, u.Partition) || u.CustomerID != customerID {
 			continue
 		}
 		if u.RecordedAt.Before(from) || !u.RecordedAt.Before(to) {
@@ -461,12 +461,12 @@ func (m *MemStore) GrantCredit(_ context.Context, c *Credit) error {
 	return nil
 }
 
-func (m *MemStore) ListCredits(_ context.Context, owner, customerID string) ([]*Credit, error) {
+func (m *MemStore) ListCredits(_ context.Context, partition, customerID string) ([]*Credit, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []*Credit
 	for _, c := range m.credits {
-		if ownerMatch(owner, c.Owner) && c.CustomerID == customerID {
+		if partitionMatch(partition, c.Partition) && c.CustomerID == customerID {
 			out = append(out, cloneCredit(c))
 		}
 	}
@@ -474,12 +474,12 @@ func (m *MemStore) ListCredits(_ context.Context, owner, customerID string) ([]*
 	return out, nil
 }
 
-func (m *MemStore) CreditBalance(_ context.Context, owner, customerID string, now time.Time) (map[string]int64, error) {
+func (m *MemStore) CreditBalance(_ context.Context, partition, customerID string, now time.Time) (map[string]int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	bal := map[string]int64{}
 	for _, c := range m.credits {
-		if !ownerMatch(owner, c.Owner) || c.CustomerID != customerID {
+		if !partitionMatch(partition, c.Partition) || c.CustomerID != customerID {
 			continue
 		}
 		if c.ExpiresAt != nil && !now.Before(*c.ExpiresAt) {

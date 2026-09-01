@@ -9,8 +9,8 @@ import (
 
 // SQLStore is the durable default Store over any database/sql driver — the shipped standalone store. The
 // package imports only database/sql (stdlib); the APP supplies the opened *sql.DB and registers the
-// driver, so billing pulls no driver dependency yet works out of the box. Owner is an opaque column the
-// store filters on but never interprets ("" matches any owner). Money is INTEGER minor units; times
+// driver, so billing pulls no driver dependency yet works out of the box. Partition is an opaque column the
+// store filters on but never interprets ("" matches any partition). Money is INTEGER minor units; times
 // persist as INTEGER Unix nanos with NULL for an unset *time.Time; metadata as JSON. Only sealed payment
 // material reaches the ledger table. The Store interface stays the escape-hatch for a mesh gateway or
 // MemStore.
@@ -25,46 +25,46 @@ var _ Store = (*SQLStore)(nil)
 func (s *SQLStore) InitSchema(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS billing_customers (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL DEFAULT '',
 			org_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
 			billing_email TEXT NOT NULL DEFAULT '', billing_name TEXT NOT NULL DEFAULT '',
 			currency TEXT NOT NULL DEFAULT '', tax_id TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_customers_owner ON billing_customers(owner, user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_customers_partition ON billing_customers(partition, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_customers_provref ON billing_customers(provider_ref)`,
 		`CREATE TABLE IF NOT EXISTS billing_products (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', service_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', service_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
 			active INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_products_owner ON billing_products(owner)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_products_partition ON billing_products(partition)`,
 		`CREATE TABLE IF NOT EXISTS billing_prices (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', product_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', product_id TEXT NOT NULL DEFAULT '',
 			provider_ref TEXT NOT NULL DEFAULT '', currency TEXT NOT NULL DEFAULT '',
 			amount_cents INTEGER NOT NULL DEFAULT 0, interval TEXT NOT NULL DEFAULT '',
 			pricing_model TEXT NOT NULL DEFAULT '', tier_config TEXT NOT NULL DEFAULT '',
 			percentage_rate REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_prices_product ON billing_prices(owner, product_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_prices_product ON billing_prices(partition, product_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_subscriptions (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			price_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0,
 			current_period_start INTEGER, current_period_end INTEGER,
 			cancel_at_period_end INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0, canceled_at INTEGER
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_subs_customer ON billing_subscriptions(owner, customer_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_subs_customer ON billing_subscriptions(partition, customer_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_invoices (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			subscription_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
 			number TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', currency TEXT NOT NULL DEFAULT '',
 			amount_due_cents INTEGER NOT NULL DEFAULT 0, amount_paid_cents INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL DEFAULT 0, due_at INTEGER, paid_at INTEGER
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_invoices_customer ON billing_invoices(owner, customer_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_invoices_customer ON billing_invoices(partition, customer_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_invoice_items (
 			id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL DEFAULT '', product_id TEXT NOT NULL DEFAULT '',
 			description TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0,
@@ -73,25 +73,25 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_items_invoice ON billing_invoice_items(invoice_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_payments (
-			idempotency_key TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			idempotency_key TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			payment_intent_ref TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
 			amount_cents INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '',
 			charge_ref_sealed TEXT NOT NULL DEFAULT '', client_secret_sealed TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_payments_customer ON billing_payments(owner, customer_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_payments_customer ON billing_payments(partition, customer_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_usage (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			product_id TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0,
 			metadata TEXT NOT NULL DEFAULT '{}', recorded_at INTEGER NOT NULL DEFAULT 0
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_usage_customer ON billing_usage(owner, customer_id, recorded_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_usage_customer ON billing_usage(partition, customer_id, recorded_at)`,
 		`CREATE TABLE IF NOT EXISTS billing_credits (
-			id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			amount_cents INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '',
 			reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0, expires_at INTEGER
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_credits_customer ON billing_credits(owner, customer_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_credits_customer ON billing_credits(partition, customer_id)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -147,12 +147,12 @@ func readMap(s string) map[string]string {
 
 // ── Customers ──
 
-const customerCols = `id, owner, user_id, org_id, provider_ref, billing_email, billing_name, currency, tax_id, created_at, updated_at`
+const customerCols = `id, partition, user_id, org_id, provider_ref, billing_email, billing_name, currency, tax_id, created_at, updated_at`
 
 func scanCustomer2(sc interface{ Scan(...any) error }) (*Customer, error) {
 	var c Customer
 	var created, updated int64
-	if err := sc.Scan(&c.ID, &c.Owner, &c.UserID, &c.OrgID, &c.ProviderRef, &c.BillingEmail,
+	if err := sc.Scan(&c.ID, &c.Partition, &c.UserID, &c.OrgID, &c.ProviderRef, &c.BillingEmail,
 		&c.BillingName, &c.Currency, &c.TaxID, &created, &updated); err != nil {
 		return nil, err
 	}
@@ -172,14 +172,14 @@ func (s *SQLStore) CreateCustomer(ctx context.Context, c *Customer) error {
 	c.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_customers (`+customerCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Owner, c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
+		c.ID, c.Partition, c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
 		c.TaxID, tnanos(c.CreatedAt), tnanos(c.UpdatedAt))
 	return err
 }
 
-func (s *SQLStore) GetCustomer(ctx context.Context, owner, id string) (*Customer, error) {
+func (s *SQLStore) GetCustomer(ctx context.Context, partition, id string) (*Customer, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+customerCols+` FROM billing_customers
-		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
 	c, err := scanCustomer2(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -200,9 +200,9 @@ func (s *SQLStore) GetCustomerByProviderRef(ctx context.Context, providerRef str
 	return c, err
 }
 
-func (s *SQLStore) GetCustomerByUser(ctx context.Context, owner, userID string) (*Customer, error) {
+func (s *SQLStore) GetCustomerByUser(ctx context.Context, partition, userID string) (*Customer, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+customerCols+` FROM billing_customers
-		WHERE (? = '' OR owner = ?) AND user_id = ? LIMIT 1`, owner, owner, userID)
+		WHERE (? = '' OR partition = ?) AND user_id = ? LIMIT 1`, partition, partition, userID)
 	c, err := scanCustomer2(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -210,9 +210,9 @@ func (s *SQLStore) GetCustomerByUser(ctx context.Context, owner, userID string) 
 	return c, err
 }
 
-func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, owner, id, providerRef string) error {
+func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, partition, id, providerRef string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET provider_ref = ?, updated_at = ?
-		WHERE id = ? AND (? = '' OR owner = ?)`, providerRef, time.Now().UnixNano(), id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, providerRef, time.Now().UnixNano(), id, partition, partition)
 	if err != nil {
 		return err
 	}
@@ -225,9 +225,9 @@ func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, owner, id, provid
 func (s *SQLStore) UpdateCustomer(ctx context.Context, c *Customer) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET user_id=?, org_id=?, provider_ref=?,
 		billing_email=?, billing_name=?, currency=?, tax_id=?, updated_at=?
-		WHERE id = ? AND (? = '' OR owner = ?)`,
+		WHERE id = ? AND (? = '' OR partition = ?)`,
 		c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency, c.TaxID,
-		time.Now().UnixNano(), c.ID, c.Owner, c.Owner)
+		time.Now().UnixNano(), c.ID, c.Partition, c.Partition)
 	if err != nil {
 		return err
 	}
@@ -249,9 +249,9 @@ func (s *SQLStore) CreateProduct(ctx context.Context, p *Product) error {
 	}
 	p.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_products
-		(id, owner, service_id, name, description, active, created_at, updated_at)
+		(id, partition, service_id, name, description, active, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
-		p.ID, p.Owner, p.ServiceID, p.Name, p.Description, boolInt(p.Active), tnanos(p.CreatedAt), tnanos(p.UpdatedAt))
+		p.ID, p.Partition, p.ServiceID, p.Name, p.Description, boolInt(p.Active), tnanos(p.CreatedAt), tnanos(p.UpdatedAt))
 	return err
 }
 
@@ -259,7 +259,7 @@ func scanProduct(sc interface{ Scan(...any) error }) (*Product, error) {
 	var p Product
 	var active int
 	var created, updated int64
-	if err := sc.Scan(&p.ID, &p.Owner, &p.ServiceID, &p.Name, &p.Description, &active, &created, &updated); err != nil {
+	if err := sc.Scan(&p.ID, &p.Partition, &p.ServiceID, &p.Name, &p.Description, &active, &created, &updated); err != nil {
 		return nil, err
 	}
 	p.Active = active != 0
@@ -268,11 +268,11 @@ func scanProduct(sc interface{ Scan(...any) error }) (*Product, error) {
 	return &p, nil
 }
 
-const productCols = `id, owner, service_id, name, description, active, created_at, updated_at`
+const productCols = `id, partition, service_id, name, description, active, created_at, updated_at`
 
-func (s *SQLStore) GetProduct(ctx context.Context, owner, id string) (*Product, error) {
+func (s *SQLStore) GetProduct(ctx context.Context, partition, id string) (*Product, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+productCols+` FROM billing_products
-		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
 	p, err := scanProduct(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -280,9 +280,9 @@ func (s *SQLStore) GetProduct(ctx context.Context, owner, id string) (*Product, 
 	return p, err
 }
 
-func (s *SQLStore) ListProducts(ctx context.Context, owner string, activeOnly bool) ([]*Product, error) {
-	where := `(? = '' OR owner = ?)`
-	args := []any{owner, owner}
+func (s *SQLStore) ListProducts(ctx context.Context, partition string, activeOnly bool) ([]*Product, error) {
+	where := `(? = '' OR partition = ?)`
+	args := []any{partition, partition}
 	if activeOnly {
 		where += ` AND active = 1`
 	}
@@ -302,12 +302,12 @@ func (s *SQLStore) ListProducts(ctx context.Context, owner string, activeOnly bo
 	return out, rows.Err()
 }
 
-const priceCols = `id, owner, product_id, provider_ref, currency, amount_cents, interval, pricing_model, tier_config, percentage_rate, created_at`
+const priceCols = `id, partition, product_id, provider_ref, currency, amount_cents, interval, pricing_model, tier_config, percentage_rate, created_at`
 
 func scanPrice(sc interface{ Scan(...any) error }) (*Price, error) {
 	var p Price
 	var created int64
-	if err := sc.Scan(&p.ID, &p.Owner, &p.ProductID, &p.ProviderRef, &p.Currency, &p.AmountCents,
+	if err := sc.Scan(&p.ID, &p.Partition, &p.ProductID, &p.ProviderRef, &p.Currency, &p.AmountCents,
 		&p.Interval, &p.PricingModel, &p.TierConfig, &p.PercentageRate, &created); err != nil {
 		return nil, err
 	}
@@ -324,14 +324,14 @@ func (s *SQLStore) CreatePrice(ctx context.Context, p *Price) error {
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_prices (`+priceCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		p.ID, p.Owner, p.ProductID, p.ProviderRef, p.Currency, p.AmountCents, p.Interval,
+		p.ID, p.Partition, p.ProductID, p.ProviderRef, p.Currency, p.AmountCents, p.Interval,
 		p.PricingModel, p.TierConfig, p.PercentageRate, tnanos(p.CreatedAt))
 	return err
 }
 
-func (s *SQLStore) GetPrice(ctx context.Context, owner, id string) (*Price, error) {
+func (s *SQLStore) GetPrice(ctx context.Context, partition, id string) (*Price, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+priceCols+` FROM billing_prices
-		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
 	p, err := scanPrice(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -339,9 +339,9 @@ func (s *SQLStore) GetPrice(ctx context.Context, owner, id string) (*Price, erro
 	return p, err
 }
 
-func (s *SQLStore) ListPrices(ctx context.Context, owner, productID string) ([]*Price, error) {
+func (s *SQLStore) ListPrices(ctx context.Context, partition, productID string) ([]*Price, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+priceCols+` FROM billing_prices
-		WHERE (? = '' OR owner = ?) AND product_id = ? ORDER BY amount_cents ASC`, owner, owner, productID)
+		WHERE (? = '' OR partition = ?) AND product_id = ? ORDER BY amount_cents ASC`, partition, partition, productID)
 	if err != nil {
 		return nil, err
 	}
@@ -357,9 +357,9 @@ func (s *SQLStore) ListPrices(ctx context.Context, owner, productID string) ([]*
 	return out, rows.Err()
 }
 
-func (s *SQLStore) SetPriceProviderRef(ctx context.Context, owner, id, providerRef string) error {
+func (s *SQLStore) SetPriceProviderRef(ctx context.Context, partition, id, providerRef string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_prices SET provider_ref = ?
-		WHERE id = ? AND (? = '' OR owner = ?)`, providerRef, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, providerRef, id, partition, partition)
 	if err != nil {
 		return err
 	}
@@ -371,7 +371,7 @@ func (s *SQLStore) SetPriceProviderRef(ctx context.Context, owner, id, providerR
 
 // ── Subscriptions ──
 
-const subCols = `id, owner, customer_id, price_id, provider_ref, status, quantity,
+const subCols = `id, partition, customer_id, price_id, provider_ref, status, quantity,
 	current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at, canceled_at`
 
 func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
@@ -379,7 +379,7 @@ func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 	var cancel int
 	var created, updated int64
 	var cps, cpe, canceled sql.NullInt64
-	if err := sc.Scan(&s.ID, &s.Owner, &s.CustomerID, &s.PriceID, &s.ProviderRef, &s.Status,
+	if err := sc.Scan(&s.ID, &s.Partition, &s.CustomerID, &s.PriceID, &s.ProviderRef, &s.Status,
 		&s.Quantity, &cps, &cpe, &cancel, &created, &updated, &canceled); err != nil {
 		return nil, err
 	}
@@ -403,15 +403,15 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 	sub.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		sub.ID, sub.Owner, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
+		sub.ID, sub.Partition, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
 		ptrNanos(sub.CurrentPeriodStart), ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd),
 		tnanos(sub.CreatedAt), tnanos(sub.UpdatedAt), ptrNanos(sub.CanceledAt))
 	return err
 }
 
-func (s *SQLStore) GetSubscription(ctx context.Context, owner, id string) (*Subscription, error) {
+func (s *SQLStore) GetSubscription(ctx context.Context, partition, id string) (*Subscription, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM billing_subscriptions
-		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
 	sub, err := scanSub(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -419,9 +419,9 @@ func (s *SQLStore) GetSubscription(ctx context.Context, owner, id string) (*Subs
 	return sub, err
 }
 
-func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, owner, customerID string) ([]*Subscription, error) {
+func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, customerID string) ([]*Subscription, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+subCols+` FROM billing_subscriptions
-		WHERE (? = '' OR owner = ?) AND customer_id = ? ORDER BY created_at DESC`, owner, owner, customerID)
+		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -440,10 +440,10 @@ func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, owner, custo
 func (s *SQLStore) UpdateSubscription(ctx context.Context, sub *Subscription) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_subscriptions SET price_id=?, provider_ref=?,
 		status=?, quantity=?, current_period_start=?, current_period_end=?, cancel_at_period_end=?,
-		updated_at=?, canceled_at=? WHERE id = ? AND (? = '' OR owner = ?)`,
+		updated_at=?, canceled_at=? WHERE id = ? AND (? = '' OR partition = ?)`,
 		sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
 		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), time.Now().UnixNano(),
-		ptrNanos(sub.CanceledAt), sub.ID, sub.Owner, sub.Owner)
+		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition)
 	if err != nil {
 		return err
 	}

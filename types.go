@@ -1,7 +1,7 @@
 // Package billing is the scope-agnostic billing system (extracted from the HSTLES billing domain). It
 // owns the neutral money-state — customers, a product/price catalog, subscriptions, invoices, an
 // idempotency-keyed payment ledger, metered usage, and credit grants — over an injected store. The
-// primary axis (a baked per-tenant billing DB) becomes an opaque Owner the system never interprets; the
+// primary axis (a baked per-tenant billing DB) becomes an opaque Partition the system never interprets; the
 // customer/user/org ids are opaque; and every payment-PROVIDER identifier (a Stripe customer/price/
 // intent id) is a single opaque ProviderRef, because the provider itself is a pluggable seam a consumer
 // injects — the package holds neutral state and pulls no payment-SDK dependency. Money is always int64
@@ -12,12 +12,12 @@ package billing
 
 import "time"
 
-// Customer is a billing customer. Owner is the opaque owner-scope; UserID/OrgID are opaque grouping
+// Customer is a billing customer. Partition is the opaque partition-scope; UserID/OrgID are opaque grouping
 // ids; ProviderRef is the opaque payment-provider customer id (e.g. a Stripe customer). Currency is the
 // ISO-4217 code the customer is billed in.
 type Customer struct {
 	ID           string
-	Owner        string // opaque owner-scope (was the per-tenant billing DB)
+	Partition        string // opaque partition-scope (was the per-tenant billing DB)
 	UserID       string
 	OrgID        string
 	ProviderRef  string // opaque provider customer id
@@ -33,7 +33,7 @@ type Customer struct {
 // tie products to a service/feature.
 type Product struct {
 	ID          string
-	Owner       string
+	Partition       string
 	ServiceID   string
 	Name        string
 	Description string
@@ -48,7 +48,7 @@ type Product struct {
 // to a percentage model.
 type Price struct {
 	ID             string
-	Owner          string
+	Partition          string
 	ProductID      string
 	ProviderRef    string // opaque provider price id
 	Currency       string
@@ -64,7 +64,7 @@ type Price struct {
 // validates it against the allowed set (see subscription.go). Cancel-at-period-end defers cancellation.
 type Subscription struct {
 	ID                 string
-	Owner              string
+	Partition              string
 	CustomerID         string
 	PriceID            string
 	ProviderRef        string // opaque provider subscription id
@@ -82,7 +82,7 @@ type Subscription struct {
 // ("draft"/"open"/"paid"/"void"/"uncollectible"). Line items live in InvoiceItem.
 type Invoice struct {
 	ID              string
-	Owner           string
+	Partition           string
 	CustomerID      string
 	SubscriptionID  string
 	ProviderRef     string // opaque provider invoice id
@@ -115,7 +115,7 @@ type InvoiceItem struct {
 // encrypted at rest (an injected Encryptor); they never reach the store in the clear.
 type PaymentLedgerRow struct {
 	IdempotencyKey     string
-	Owner              string
+	Partition              string
 	CustomerID         string
 	PaymentIntentRef   string // opaque provider payment-intent id
 	Status             string
@@ -131,7 +131,7 @@ type PaymentLedgerRow struct {
 // period. Metadata is opaque.
 type UsageRecord struct {
 	ID         string
-	Owner      string
+	Partition      string
 	CustomerID string
 	ProductID  string
 	Quantity   int64
@@ -150,7 +150,7 @@ type UsageSummary struct {
 // opaque; an expired credit (ExpiresAt in the past) no longer counts toward the balance.
 type Credit struct {
 	ID          string
-	Owner       string
+	Partition       string
 	CustomerID  string
 	AmountCents int64
 	Currency    string

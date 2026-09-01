@@ -8,14 +8,14 @@ import (
 
 // ── Invoices ──
 
-const invoiceCols = `id, owner, customer_id, subscription_id, provider_ref, number, status, currency,
+const invoiceCols = `id, partition, customer_id, subscription_id, provider_ref, number, status, currency,
 	amount_due_cents, amount_paid_cents, created_at, due_at, paid_at`
 
 func scanInvoice(sc interface{ Scan(...any) error }) (*Invoice, error) {
 	var inv Invoice
 	var created int64
 	var due, paid sql.NullInt64
-	if err := sc.Scan(&inv.ID, &inv.Owner, &inv.CustomerID, &inv.SubscriptionID, &inv.ProviderRef,
+	if err := sc.Scan(&inv.ID, &inv.Partition, &inv.CustomerID, &inv.SubscriptionID, &inv.ProviderRef,
 		&inv.Number, &inv.Status, &inv.Currency, &inv.AmountDueCents, &inv.AmountPaidCents,
 		&created, &due, &paid); err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*Inv
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_invoices (`+invoiceCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		inv.ID, inv.Owner, inv.CustomerID, inv.SubscriptionID, inv.ProviderRef, inv.Number, inv.Status,
+		inv.ID, inv.Partition, inv.CustomerID, inv.SubscriptionID, inv.ProviderRef, inv.Number, inv.Status,
 		inv.Currency, inv.AmountDueCents, inv.AmountPaidCents, tnanos(inv.CreatedAt), ptrNanos(inv.DueAt),
 		ptrNanos(inv.PaidAt)); err != nil {
 		return err
@@ -61,9 +61,9 @@ func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*Inv
 	return tx.Commit()
 }
 
-func (s *SQLStore) GetInvoice(ctx context.Context, owner, id string) (*Invoice, error) {
+func (s *SQLStore) GetInvoice(ctx context.Context, partition, id string) (*Invoice, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
-		WHERE id = ? AND (? = '' OR owner = ?)`, id, owner, owner)
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
 	inv, err := scanInvoice(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -71,9 +71,9 @@ func (s *SQLStore) GetInvoice(ctx context.Context, owner, id string) (*Invoice, 
 	return inv, err
 }
 
-func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, owner, customerID string) ([]*Invoice, error) {
+func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, partition, customerID string) ([]*Invoice, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
-		WHERE (? = '' OR owner = ?) AND customer_id = ? ORDER BY created_at DESC`, owner, owner, customerID)
+		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,16 +110,16 @@ func (s *SQLStore) ListInvoiceItems(ctx context.Context, invoiceID string) ([]*I
 	return out, rows.Err()
 }
 
-func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, owner, id, status string, amountPaidCents int64) error {
+func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, partition, id, status string, amountPaidCents int64) error {
 	set := `status = ?, amount_paid_cents = ?`
 	args := []any{status, amountPaidCents}
 	if status == "paid" {
 		set += `, paid_at = COALESCE(paid_at, ?)`
 		args = append(args, time.Now().UnixNano())
 	}
-	args = append(args, id, owner, owner)
+	args = append(args, id, partition, partition)
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_invoices SET `+set+`
-		WHERE id = ? AND (? = '' OR owner = ?)`, args...)
+		WHERE id = ? AND (? = '' OR partition = ?)`, args...)
 	if err != nil {
 		return err
 	}
@@ -131,13 +131,13 @@ func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, owner, id, status st
 
 // ── Payment ledger ──
 
-const paymentCols = `idempotency_key, owner, customer_id, payment_intent_ref, status, amount_cents,
+const paymentCols = `idempotency_key, partition, customer_id, payment_intent_ref, status, amount_cents,
 	currency, charge_ref_sealed, client_secret_sealed, created_at, updated_at`
 
 func scanPayment(sc interface{ Scan(...any) error }) (*PaymentLedgerRow, error) {
 	var r PaymentLedgerRow
 	var created, updated int64
-	if err := sc.Scan(&r.IdempotencyKey, &r.Owner, &r.CustomerID, &r.PaymentIntentRef, &r.Status,
+	if err := sc.Scan(&r.IdempotencyKey, &r.Partition, &r.CustomerID, &r.PaymentIntentRef, &r.Status,
 		&r.AmountCents, &r.Currency, &r.ChargeRefSealed, &r.ClientSecretSealed, &created, &updated); err != nil {
 		return nil, err
 	}
@@ -169,7 +169,7 @@ func (s *SQLStore) RecordPayment(ctx context.Context, row *PaymentLedgerRow) (*P
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_payments (`+paymentCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		row.IdempotencyKey, row.Owner, row.CustomerID, row.PaymentIntentRef, row.Status, row.AmountCents,
+		row.IdempotencyKey, row.Partition, row.CustomerID, row.PaymentIntentRef, row.Status, row.AmountCents,
 		row.Currency, row.ChargeRefSealed, row.ClientSecretSealed, tnanos(row.CreatedAt), tnanos(row.UpdatedAt)); err != nil {
 		return nil, err
 	}
@@ -207,9 +207,9 @@ func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, idempotencyKey, stat
 	return nil
 }
 
-func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, owner, customerID string) ([]*PaymentLedgerRow, error) {
+func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, partition, customerID string) ([]*PaymentLedgerRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
-		WHERE (? = '' OR owner = ?) AND customer_id = ? ORDER BY created_at DESC`, owner, owner, customerID)
+		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -235,16 +235,16 @@ func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
 		u.RecordedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
-		(id, owner, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
-		u.ID, u.Owner, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
+		(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+		u.ID, u.Partition, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
 	return err
 }
 
-func (s *SQLStore) SummarizeUsage(ctx context.Context, owner, customerID string, from, to time.Time) ([]*UsageSummary, error) {
+func (s *SQLStore) SummarizeUsage(ctx context.Context, partition, customerID string, from, to time.Time) ([]*UsageSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT product_id, SUM(quantity), MAX(quantity)
-		FROM billing_usage WHERE (? = '' OR owner = ?) AND customer_id = ?
+		FROM billing_usage WHERE (? = '' OR partition = ?) AND customer_id = ?
 		AND recorded_at >= ? AND recorded_at < ? GROUP BY product_id ORDER BY product_id ASC`,
-		owner, owner, customerID, from.UnixNano(), to.UnixNano())
+		partition, partition, customerID, from.UnixNano(), to.UnixNano())
 	if err != nil {
 		return nil, err
 	}
@@ -270,16 +270,16 @@ func (s *SQLStore) GrantCredit(ctx context.Context, c *Credit) error {
 		c.CreatedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_credits
-		(id, owner, customer_id, amount_cents, currency, reason, created_at, expires_at)
+		(id, partition, customer_id, amount_cents, currency, reason, created_at, expires_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
-		c.ID, c.Owner, c.CustomerID, c.AmountCents, c.Currency, c.Reason, tnanos(c.CreatedAt), ptrNanos(c.ExpiresAt))
+		c.ID, c.Partition, c.CustomerID, c.AmountCents, c.Currency, c.Reason, tnanos(c.CreatedAt), ptrNanos(c.ExpiresAt))
 	return err
 }
 
-func (s *SQLStore) ListCredits(ctx context.Context, owner, customerID string) ([]*Credit, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, owner, customer_id, amount_cents, currency, reason,
-		created_at, expires_at FROM billing_credits WHERE (? = '' OR owner = ?) AND customer_id = ?
-		ORDER BY created_at DESC`, owner, owner, customerID)
+func (s *SQLStore) ListCredits(ctx context.Context, partition, customerID string) ([]*Credit, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, partition, customer_id, amount_cents, currency, reason,
+		created_at, expires_at FROM billing_credits WHERE (? = '' OR partition = ?) AND customer_id = ?
+		ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +289,7 @@ func (s *SQLStore) ListCredits(ctx context.Context, owner, customerID string) ([
 		var c Credit
 		var created int64
 		var expires sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.Owner, &c.CustomerID, &c.AmountCents, &c.Currency, &c.Reason,
+		if err := rows.Scan(&c.ID, &c.Partition, &c.CustomerID, &c.AmountCents, &c.Currency, &c.Reason,
 			&created, &expires); err != nil {
 			return nil, err
 		}
@@ -300,11 +300,11 @@ func (s *SQLStore) ListCredits(ctx context.Context, owner, customerID string) ([
 	return out, rows.Err()
 }
 
-func (s *SQLStore) CreditBalance(ctx context.Context, owner, customerID string, now time.Time) (map[string]int64, error) {
+func (s *SQLStore) CreditBalance(ctx context.Context, partition, customerID string, now time.Time) (map[string]int64, error) {
 	// A credit counts unless it has expired (expires_at <= now). NULL expiry never expires.
 	rows, err := s.db.QueryContext(ctx, `SELECT currency, SUM(amount_cents) FROM billing_credits
-		WHERE (? = '' OR owner = ?) AND customer_id = ? AND (expires_at IS NULL OR expires_at > ?)
-		GROUP BY currency`, owner, owner, customerID, now.UnixNano())
+		WHERE (? = '' OR partition = ?) AND customer_id = ? AND (expires_at IS NULL OR expires_at > ?)
+		GROUP BY currency`, partition, partition, customerID, now.UnixNano())
 	if err != nil {
 		return nil, err
 	}
