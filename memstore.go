@@ -13,19 +13,21 @@ import (
 // (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on an
 // partition-scoped read means any partition.
 type MemStore struct {
-	mu             sync.Mutex
-	customers      map[string]*Customer
-	products       map[string]*Product
-	prices         map[string]*Price
-	subscriptions  map[string]*Subscription
-	invoices       map[string]*Invoice
-	invoiceItems   []*InvoiceItem
-	payments       map[string]*PaymentLedgerRow // keyed by IdempotencyKey
-	usage          []*UsageRecord
-	credits        []*Credit
-	paymentMethods map[string]*PaymentMethod // keyed by PaymentMethod.ID
-	now            func() time.Time
-	newID          func() string
+	mu               sync.Mutex
+	customers        map[string]*Customer
+	products         map[string]*Product
+	prices           map[string]*Price
+	subscriptions    map[string]*Subscription
+	invoices         map[string]*Invoice
+	invoiceItems     []*InvoiceItem
+	payments         map[string]*PaymentLedgerRow // keyed by IdempotencyKey
+	usage            []*UsageRecord
+	credits          []*Credit
+	paymentMethods   map[string]*PaymentMethod // keyed by PaymentMethod.ID
+	discounts        map[string]*Discount      // catalogue, keyed by DiscountID
+	appliedDiscounts []*AppliedDiscount        // idempotency ledger
+	now              func() time.Time
+	newID            func() string
 }
 
 // NewMemStore builds an empty billing store.
@@ -38,6 +40,7 @@ func NewMemStore() *MemStore {
 		invoices:       map[string]*Invoice{},
 		payments:       map[string]*PaymentLedgerRow{},
 		paymentMethods: map[string]*PaymentMethod{},
+		discounts:      map[string]*Discount{},
 		now:            time.Now,
 		newID:          randomID,
 	}
@@ -629,6 +632,64 @@ func (m *MemStore) RemovePaymentMethod(_ context.Context, partition, id string) 
 	pm.IsDefault = false
 	pm.UpdatedAt = m.now()
 	return nil
+}
+
+// ── discounts ──
+
+func (m *MemStore) UpsertDiscount(_ context.Context, d *Discount) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d.DiscountID == "" {
+		d.DiscountID = m.newID()
+	}
+	cp := *d
+	m.discounts[d.DiscountID] = &cp
+	return nil
+}
+
+func (m *MemStore) GetDiscount(_ context.Context, partition, discountID string) (*Discount, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.discounts[discountID]
+	if !ok || !partitionMatch(partition, d.Partition) {
+		return nil, ErrDiscountNotFound
+	}
+	cp := *d
+	return &cp, nil
+}
+
+func (m *MemStore) IsDiscountApplied(_ context.Context, partition, subscriptionRef, discountID string) (bool, error) {
+	if subscriptionRef == "" || discountID == "" {
+		return false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.appliedDiscounts {
+		if a.SubscriptionRef == subscriptionRef && a.DiscountID == discountID && partitionMatch(partition, a.Partition) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error) {
+	if subscriptionRef == "" || discountID == "" {
+		return nil, ErrNotFound
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.appliedDiscounts {
+		if a.SubscriptionRef == subscriptionRef && a.DiscountID == discountID && partitionMatch(partition, a.Partition) {
+			return nil, ErrDiscountAlreadyApplied
+		}
+	}
+	rec := &AppliedDiscount{ID: m.newID(), Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
+	m.appliedDiscounts = append(m.appliedDiscounts, rec)
+	if d, ok := m.discounts[discountID]; ok {
+		d.CurrentUses++
+	}
+	cp := *rec
+	return &cp, nil
 }
 
 var _ Store = (*MemStore)(nil)

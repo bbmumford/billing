@@ -102,6 +102,18 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_pm_customer ON billing_payment_methods(partition, customer_id)`,
+		`CREATE TABLE IF NOT EXISTS billing_discounts (
+			discount_id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', code TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT '', value REAL NOT NULL DEFAULT 0,
+			applies_to TEXT NOT NULL DEFAULT '', max_uses INTEGER NOT NULL DEFAULT 0,
+			current_uses INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS billing_applied_discounts (
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', subscription_ref TEXT NOT NULL DEFAULT '',
+			discount_id TEXT NOT NULL DEFAULT '', applied_at INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(partition, subscription_ref, discount_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_applied_disc ON billing_applied_discounts(partition, subscription_ref, discount_id)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -580,4 +592,88 @@ func (s *SQLStore) RemovePaymentMethod(ctx context.Context, partition, id string
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ── discounts ──
+
+func (s *SQLStore) UpsertDiscount(ctx context.Context, d *Discount) error {
+	if d.DiscountID == "" {
+		d.DiscountID = randomID()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_discounts
+		(discount_id, partition, code, name, type, value, applies_to, max_uses, current_uses, active)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(discount_id) DO UPDATE SET partition=excluded.partition, code=excluded.code,
+		name=excluded.name, type=excluded.type, value=excluded.value, applies_to=excluded.applies_to,
+		max_uses=excluded.max_uses, active=excluded.active`,
+		d.DiscountID, d.Partition, d.Code, d.Name, d.Type, d.Value, d.AppliesTo, d.MaxUses, d.CurrentUses, boolInt(d.Active))
+	return err
+}
+
+func (s *SQLStore) GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT discount_id, partition, code, name, type, value,
+		applies_to, max_uses, current_uses, active FROM billing_discounts
+		WHERE discount_id = ? AND (? = '' OR partition = ?)`, discountID, partition, partition)
+	var d Discount
+	var active int
+	if err := row.Scan(&d.DiscountID, &d.Partition, &d.Code, &d.Name, &d.Type, &d.Value,
+		&d.AppliesTo, &d.MaxUses, &d.CurrentUses, &active); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrDiscountNotFound
+		}
+		return nil, err
+	}
+	d.Active = active != 0
+	return &d, nil
+}
+
+func (s *SQLStore) IsDiscountApplied(ctx context.Context, partition, subscriptionRef, discountID string) (bool, error) {
+	if subscriptionRef == "" || discountID == "" {
+		return false, nil
+	}
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM billing_applied_discounts
+		WHERE (? = '' OR partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
+		partition, partition, subscriptionRef, discountID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error) {
+	if subscriptionRef == "" || discountID == "" {
+		return nil, ErrNotFound
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var existing string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM billing_applied_discounts
+		WHERE (? = '' OR partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
+		partition, partition, subscriptionRef, discountID).Scan(&existing)
+	if err == nil {
+		return nil, ErrDiscountAlreadyApplied
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	id := randomID()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_applied_discounts (id, partition, subscription_ref, discount_id, applied_at)
+		VALUES (?,?,?,?,?)`, id, partition, subscriptionRef, discountID, time.Now().UnixNano()); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses + 1
+		WHERE discount_id = ? AND (? = '' OR partition = ?)`, discountID, partition, partition); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &AppliedDiscount{ID: id, Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}, nil
 }

@@ -77,4 +77,16 @@ type Store interface {
 	SetDefaultPaymentMethod(ctx context.Context, partition, customerID, id string) error
 	// RemovePaymentMethod soft-deletes a method (Active=false) within the partition.
 	RemovePaymentMethod(ctx context.Context, partition, id string) error
+
+	// ── Discounts ──
+	// UpsertDiscount inserts or replaces a catalogue discount (the out-of-band sync/seed path that mirrors
+	// a provider coupon into the local catalogue). current_uses is preserved by the apply path, not this.
+	UpsertDiscount(ctx context.Context, d *Discount) error
+	// GetDiscount reads a catalogue discount by id within the partition; ErrDiscountNotFound when absent.
+	GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error)
+	// IsDiscountApplied reports whether (subscriptionRef, discountID) is already recorded in the partition.
+	IsDiscountApplied(ctx context.Context, partition, subscriptionRef, discountID string) (bool, error)
+	// RecordAppliedDiscount records a (subscriptionRef, discountID) application and bumps the discount's
+	// current_uses in one transaction; ErrDiscountAlreadyApplied when the pair already exists.
+	RecordAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error)
 }
