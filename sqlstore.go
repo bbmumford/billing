@@ -92,6 +92,16 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0, expires_at INTEGER
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_credits_customer ON billing_credits(partition, customer_id)`,
+		`CREATE TABLE IF NOT EXISTS billing_payment_methods (
+			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT '', is_default INTEGER NOT NULL DEFAULT 0,
+			provider_ref TEXT NOT NULL DEFAULT '', card_brand TEXT NOT NULL DEFAULT '',
+			card_last4 TEXT NOT NULL DEFAULT '', card_exp_month INTEGER NOT NULL DEFAULT 0,
+			card_exp_year INTEGER NOT NULL DEFAULT 0, crypto_currency TEXT NOT NULL DEFAULT '',
+			active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_pm_customer ON billing_payment_methods(partition, customer_id)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -444,6 +454,125 @@ func (s *SQLStore) UpdateSubscription(ctx context.Context, sub *Subscription) er
 		sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
 		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), time.Now().UnixNano(),
 		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ── payment methods ──
+
+const pmCols = `id, partition, customer_id, type, is_default, provider_ref, card_brand,
+	card_last4, card_exp_month, card_exp_year, crypto_currency, active, created_at, updated_at`
+
+func scanPM(sc interface{ Scan(...any) error }) (*PaymentMethod, error) {
+	var p PaymentMethod
+	var isDefault, active int
+	var created, updated int64
+	if err := sc.Scan(&p.ID, &p.Partition, &p.CustomerID, &p.Type, &isDefault, &p.ProviderRef,
+		&p.CardBrand, &p.CardLast4, &p.CardExpMonth, &p.CardExpYear, &p.CryptoCurrency, &active,
+		&created, &updated); err != nil {
+		return nil, err
+	}
+	p.IsDefault = isDefault != 0
+	p.Active = active != 0
+	p.CreatedAt = fromNanos(created)
+	p.UpdatedAt = fromNanos(updated)
+	return &p, nil
+}
+
+func (s *SQLStore) AddPaymentMethod(ctx context.Context, pm *PaymentMethod) error {
+	if pm.ID == "" {
+		pm.ID = randomID()
+	}
+	now := time.Now()
+	if pm.CreatedAt.IsZero() {
+		pm.CreatedAt = now
+	}
+	pm.UpdatedAt = now
+	pm.Active = true
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// One default per customer: clear the others before this method claims it.
+	if pm.IsDefault {
+		if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
+			WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+			now.UnixNano(), pm.Partition, pm.Partition, pm.CustomerID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_payment_methods (`+pmCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		pm.ID, pm.Partition, pm.CustomerID, pm.Type, boolInt(pm.IsDefault), pm.ProviderRef,
+		pm.CardBrand, pm.CardLast4, pm.CardExpMonth, pm.CardExpYear, pm.CryptoCurrency,
+		boolInt(pm.Active), tnanos(pm.CreatedAt), tnanos(pm.UpdatedAt)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *SQLStore) ListPaymentMethods(ctx context.Context, partition, customerID string) ([]*PaymentMethod, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pmCols+` FROM billing_payment_methods
+		WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1 ORDER BY created_at DESC`,
+		partition, partition, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*PaymentMethod
+	for rows.Next() {
+		pm, err := scanPM(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pm)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) GetPaymentMethod(ctx context.Context, partition, id string) (*PaymentMethod, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+pmCols+` FROM billing_payment_methods
+		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+	pm, err := scanPM(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return pm, err
+}
+
+func (s *SQLStore) SetDefaultPaymentMethod(ctx context.Context, partition, customerID, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixNano()
+	if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
+		WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+		now, partition, partition, customerID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=1, updated_at=?
+		WHERE id = ? AND (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+		now, id, partition, partition, customerID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func (s *SQLStore) RemovePaymentMethod(ctx context.Context, partition, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE billing_payment_methods SET active=0, is_default=0, updated_at=?
+		WHERE id = ? AND (? = '' OR partition = ?)`, time.Now().UnixNano(), id, partition, partition)
 	if err != nil {
 		return err
 	}

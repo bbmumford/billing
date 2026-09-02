@@ -13,31 +13,33 @@ import (
 // (*sql.DB) store must match. Thread-safe; clock and id generator injectable. Partition is opaque; "" on an
 // partition-scoped read means any partition.
 type MemStore struct {
-	mu            sync.Mutex
-	customers     map[string]*Customer
-	products      map[string]*Product
-	prices        map[string]*Price
-	subscriptions map[string]*Subscription
-	invoices      map[string]*Invoice
-	invoiceItems  []*InvoiceItem
-	payments      map[string]*PaymentLedgerRow // keyed by IdempotencyKey
-	usage         []*UsageRecord
-	credits       []*Credit
-	now           func() time.Time
-	newID         func() string
+	mu             sync.Mutex
+	customers      map[string]*Customer
+	products       map[string]*Product
+	prices         map[string]*Price
+	subscriptions  map[string]*Subscription
+	invoices       map[string]*Invoice
+	invoiceItems   []*InvoiceItem
+	payments       map[string]*PaymentLedgerRow // keyed by IdempotencyKey
+	usage          []*UsageRecord
+	credits        []*Credit
+	paymentMethods map[string]*PaymentMethod // keyed by PaymentMethod.ID
+	now            func() time.Time
+	newID          func() string
 }
 
 // NewMemStore builds an empty billing store.
 func NewMemStore() *MemStore {
 	return &MemStore{
-		customers:     map[string]*Customer{},
-		products:      map[string]*Product{},
-		prices:        map[string]*Price{},
-		subscriptions: map[string]*Subscription{},
-		invoices:      map[string]*Invoice{},
-		payments:      map[string]*PaymentLedgerRow{},
-		now:           time.Now,
-		newID:         randomID,
+		customers:      map[string]*Customer{},
+		products:       map[string]*Product{},
+		prices:         map[string]*Price{},
+		subscriptions:  map[string]*Subscription{},
+		invoices:       map[string]*Invoice{},
+		payments:       map[string]*PaymentLedgerRow{},
+		paymentMethods: map[string]*PaymentMethod{},
+		now:            time.Now,
+		newID:          randomID,
 	}
 }
 
@@ -546,6 +548,87 @@ func cloneCredit(c *Credit) *Credit {
 	cp := *c
 	cp.ExpiresAt = clonePtr(c.ExpiresAt)
 	return &cp
+}
+
+func clonePaymentMethod(pm *PaymentMethod) *PaymentMethod { cp := *pm; return &cp }
+
+// ── payment methods ──
+
+func (m *MemStore) AddPaymentMethod(_ context.Context, pm *PaymentMethod) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if pm.ID == "" {
+		pm.ID = m.newID()
+	}
+	now := m.now()
+	if pm.CreatedAt.IsZero() {
+		pm.CreatedAt = now
+	}
+	pm.UpdatedAt = now
+	pm.Active = true
+	if pm.IsDefault {
+		for _, e := range m.paymentMethods {
+			if e.CustomerID == pm.CustomerID && e.Active && partitionMatch(pm.Partition, e.Partition) {
+				e.IsDefault = false
+			}
+		}
+	}
+	m.paymentMethods[pm.ID] = clonePaymentMethod(pm)
+	return nil
+}
+
+func (m *MemStore) ListPaymentMethods(_ context.Context, partition, customerID string) ([]*PaymentMethod, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PaymentMethod
+	for _, pm := range m.paymentMethods {
+		if pm.CustomerID == customerID && pm.Active && partitionMatch(partition, pm.Partition) {
+			out = append(out, clonePaymentMethod(pm))
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) GetPaymentMethod(_ context.Context, partition, id string) (*PaymentMethod, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pm, ok := m.paymentMethods[id]
+	if !ok || !partitionMatch(partition, pm.Partition) {
+		return nil, ErrNotFound
+	}
+	return clonePaymentMethod(pm), nil
+}
+
+func (m *MemStore) SetDefaultPaymentMethod(_ context.Context, partition, customerID, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target, ok := m.paymentMethods[id]
+	if !ok || !target.Active || target.CustomerID != customerID || !partitionMatch(partition, target.Partition) {
+		return ErrNotFound
+	}
+	now := m.now()
+	for _, e := range m.paymentMethods {
+		if e.CustomerID == customerID && e.Active && partitionMatch(partition, e.Partition) {
+			e.IsDefault = false
+			e.UpdatedAt = now
+		}
+	}
+	target.IsDefault = true
+	target.UpdatedAt = now
+	return nil
+}
+
+func (m *MemStore) RemovePaymentMethod(_ context.Context, partition, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pm, ok := m.paymentMethods[id]
+	if !ok || !partitionMatch(partition, pm.Partition) {
+		return ErrNotFound
+	}
+	pm.Active = false
+	pm.IsDefault = false
+	pm.UpdatedAt = m.now()
+	return nil
 }
 
 var _ Store = (*MemStore)(nil)

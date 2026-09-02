@@ -63,4 +63,18 @@ type Store interface {
 	ListCredits(ctx context.Context, partition, customerID string) ([]*Credit, error)
 	// CreditBalance sums non-expired credits (as of `now`) for a customer, returning the balance per currency.
 	CreditBalance(ctx context.Context, partition, customerID string, now time.Time) (map[string]int64, error)
+
+	// ── Payment methods ──
+	// AddPaymentMethod inserts a customer's stored payment instrument; when pm.IsDefault is set it also
+	// clears the default flag on the customer's other methods (at most one default per customer).
+	AddPaymentMethod(ctx context.Context, pm *PaymentMethod) error
+	// ListPaymentMethods returns the customer's Active methods, newest first.
+	ListPaymentMethods(ctx context.Context, partition, customerID string) ([]*PaymentMethod, error)
+	// GetPaymentMethod reads one method by id within the partition.
+	GetPaymentMethod(ctx context.Context, partition, id string) (*PaymentMethod, error)
+	// SetDefaultPaymentMethod makes id the customer's sole default (clearing the others); it errors
+	// ErrNotFound when id is not an Active method of customerID in the partition.
+	SetDefaultPaymentMethod(ctx context.Context, partition, customerID, id string) error
+	// RemovePaymentMethod soft-deletes a method (Active=false) within the partition.
+	RemovePaymentMethod(ctx context.Context, partition, id string) error
 }
