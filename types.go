@@ -17,7 +17,7 @@ import "time"
 // ISO-4217 code the customer is billed in.
 type Customer struct {
 	ID           string
-	Partition        string // opaque partition-scope (was the per-tenant billing DB)
+	Partition    string // opaque partition-scope (was the per-tenant billing DB)
 	UserID       string
 	OrgID        string
 	ProviderRef  string // opaque provider customer id
@@ -33,13 +33,19 @@ type Customer struct {
 // tie products to a service/feature.
 type Product struct {
 	ID          string
-	Partition       string
+	Partition   string
 	ServiceID   string
 	Name        string
 	Description string
 	Active      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Metadata is opaque consumer key/values carried with the product. The store
+	// never reads it; a consumer stamps identifiers a payment provider echoes back
+	// on its own records, so a webhook naming only the provider's id can still be
+	// matched to this row. Dropping it breaks that match silently — nothing here
+	// fails, the reconciliation upstream stops finding anything.
+	Metadata  map[string]string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Price is a purchasable price for a product. AmountCents is the unit price in minor units; Interval is
@@ -48,7 +54,7 @@ type Product struct {
 // to a percentage model.
 type Price struct {
 	ID             string
-	Partition          string
+	Partition      string
 	ProductID      string
 	ProviderRef    string // opaque provider price id
 	Currency       string
@@ -57,14 +63,17 @@ type Price struct {
 	PricingModel   string
 	TierConfig     string // opaque JSON (volume/graduated tiers)
 	PercentageRate float64
-	CreatedAt      time.Time
+	// Metadata is opaque consumer key/values, carried for the same reason as
+	// Product.Metadata.
+	Metadata  map[string]string
+	CreatedAt time.Time
 }
 
 // Subscription is a customer's subscription to a price. Status is opaque to the store but the service
 // validates it against the allowed set (see subscription.go). Cancel-at-period-end defers cancellation.
 type Subscription struct {
 	ID                 string
-	Partition              string
+	Partition          string
 	CustomerID         string
 	PriceID            string
 	ProviderRef        string // opaque provider subscription id
@@ -82,7 +91,7 @@ type Subscription struct {
 // ("draft"/"open"/"paid"/"void"/"uncollectible"). Line items live in InvoiceItem.
 type Invoice struct {
 	ID              string
-	Partition           string
+	Partition       string
 	CustomerID      string
 	SubscriptionID  string
 	ProviderRef     string // opaque provider invoice id
@@ -115,7 +124,7 @@ type InvoiceItem struct {
 // encrypted at rest (an injected Encryptor); they never reach the store in the clear.
 type PaymentLedgerRow struct {
 	IdempotencyKey     string
-	Partition              string
+	Partition          string
 	CustomerID         string
 	PaymentIntentRef   string // opaque provider payment-intent id
 	Status             string
@@ -131,7 +140,7 @@ type PaymentLedgerRow struct {
 // period. Metadata is opaque.
 type UsageRecord struct {
 	ID         string
-	Partition      string
+	Partition  string
 	CustomerID string
 	ProductID  string
 	Quantity   int64
@@ -150,7 +159,7 @@ type UsageSummary struct {
 // opaque; an expired credit (ExpiresAt in the past) no longer counts toward the balance.
 type Credit struct {
 	ID          string
-	Partition       string
+	Partition   string
 	CustomerID  string
 	AmountCents int64
 	Currency    string

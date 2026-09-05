@@ -36,7 +36,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS billing_products (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', service_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-			active INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
+			active INTEGER NOT NULL DEFAULT 0, metadata TEXT NOT NULL DEFAULT '{}',
+			created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_products_partition ON billing_products(partition)`,
@@ -45,7 +46,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			provider_ref TEXT NOT NULL DEFAULT '', currency TEXT NOT NULL DEFAULT '',
 			amount_cents INTEGER NOT NULL DEFAULT 0, interval TEXT NOT NULL DEFAULT '',
 			pricing_model TEXT NOT NULL DEFAULT '', tier_config TEXT NOT NULL DEFAULT '',
-			percentage_rate REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0
+			percentage_rate REAL NOT NULL DEFAULT 0, metadata TEXT NOT NULL DEFAULT '{}',
+			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_prices_product ON billing_prices(partition, product_id)`,
 		`CREATE TABLE IF NOT EXISTS billing_subscriptions (
@@ -270,27 +272,29 @@ func (s *SQLStore) CreateProduct(ctx context.Context, p *Product) error {
 		p.CreatedAt = now
 	}
 	p.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_products
-		(id, partition, service_id, name, description, active, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		p.ID, p.Partition, p.ServiceID, p.Name, p.Description, boolInt(p.Active), tnanos(p.CreatedAt), tnanos(p.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_products (`+productCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Partition, p.ServiceID, p.Name, p.Description, boolInt(p.Active), jsonMap(p.Metadata),
+		tnanos(p.CreatedAt), tnanos(p.UpdatedAt))
 	return err
 }
 
 func scanProduct(sc interface{ Scan(...any) error }) (*Product, error) {
 	var p Product
 	var active int
+	var meta string
 	var created, updated int64
-	if err := sc.Scan(&p.ID, &p.Partition, &p.ServiceID, &p.Name, &p.Description, &active, &created, &updated); err != nil {
+	if err := sc.Scan(&p.ID, &p.Partition, &p.ServiceID, &p.Name, &p.Description, &active, &meta, &created, &updated); err != nil {
 		return nil, err
 	}
 	p.Active = active != 0
+	p.Metadata = readMap(meta)
 	p.CreatedAt = fromNanos(created)
 	p.UpdatedAt = fromNanos(updated)
 	return &p, nil
 }
 
-const productCols = `id, partition, service_id, name, description, active, created_at, updated_at`
+const productCols = `id, partition, service_id, name, description, active, metadata, created_at, updated_at`
 
 func (s *SQLStore) GetProduct(ctx context.Context, partition, id string) (*Product, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+productCols+` FROM billing_products
@@ -324,15 +328,17 @@ func (s *SQLStore) ListProducts(ctx context.Context, partition string, activeOnl
 	return out, rows.Err()
 }
 
-const priceCols = `id, partition, product_id, provider_ref, currency, amount_cents, interval, pricing_model, tier_config, percentage_rate, created_at`
+const priceCols = `id, partition, product_id, provider_ref, currency, amount_cents, interval, pricing_model, tier_config, percentage_rate, metadata, created_at`
 
 func scanPrice(sc interface{ Scan(...any) error }) (*Price, error) {
 	var p Price
+	var meta string
 	var created int64
 	if err := sc.Scan(&p.ID, &p.Partition, &p.ProductID, &p.ProviderRef, &p.Currency, &p.AmountCents,
-		&p.Interval, &p.PricingModel, &p.TierConfig, &p.PercentageRate, &created); err != nil {
+		&p.Interval, &p.PricingModel, &p.TierConfig, &p.PercentageRate, &meta, &created); err != nil {
 		return nil, err
 	}
+	p.Metadata = readMap(meta)
 	p.CreatedAt = fromNanos(created)
 	return &p, nil
 }
@@ -345,9 +351,9 @@ func (s *SQLStore) CreatePrice(ctx context.Context, p *Price) error {
 		p.CreatedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_prices (`+priceCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Partition, p.ProductID, p.ProviderRef, p.Currency, p.AmountCents, p.Interval,
-		p.PricingModel, p.TierConfig, p.PercentageRate, tnanos(p.CreatedAt))
+		p.PricingModel, p.TierConfig, p.PercentageRate, jsonMap(p.Metadata), tnanos(p.CreatedAt))
 	return err
 }
 
