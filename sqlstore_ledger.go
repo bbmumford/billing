@@ -63,7 +63,7 @@ func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*Inv
 
 func (s *SQLStore) GetInvoice(ctx context.Context, partition, id string) (*Invoice, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	inv, err := scanInvoice(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -73,7 +73,7 @@ func (s *SQLStore) GetInvoice(ctx context.Context, partition, id string) (*Invoi
 
 func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, partition, customerID string) ([]*Invoice, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+invoiceCols+` FROM billing_invoices
-		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, partition, id, statu
 	}
 	args = append(args, id, partition, partition)
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_invoices SET `+set+`
-		WHERE id = ? AND (? = '' OR partition = ?)`, args...)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, args...)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, idempotencyKey, stat
 
 func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, partition, customerID string) ([]*PaymentLedgerRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
-		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
 
 func (s *SQLStore) SummarizeUsage(ctx context.Context, partition, customerID string, from, to time.Time) ([]*UsageSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT product_id, SUM(quantity), MAX(quantity)
-		FROM billing_usage WHERE (? = '' OR partition = ?) AND customer_id = ?
+		FROM billing_usage WHERE (? <> '' AND partition = ?) AND customer_id = ?
 		AND recorded_at >= ? AND recorded_at < ? GROUP BY product_id ORDER BY product_id ASC`,
 		partition, partition, customerID, from.UnixNano(), to.UnixNano())
 	if err != nil {
@@ -278,7 +278,7 @@ func (s *SQLStore) GrantCredit(ctx context.Context, c *Credit) error {
 
 func (s *SQLStore) ListCredits(ctx context.Context, partition, customerID string) ([]*Credit, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, partition, customer_id, amount_cents, currency, reason,
-		created_at, expires_at FROM billing_credits WHERE (? = '' OR partition = ?) AND customer_id = ?
+		created_at, expires_at FROM billing_credits WHERE (? <> '' AND partition = ?) AND customer_id = ?
 		ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
@@ -303,7 +303,7 @@ func (s *SQLStore) ListCredits(ctx context.Context, partition, customerID string
 func (s *SQLStore) CreditBalance(ctx context.Context, partition, customerID string, now time.Time) (map[string]int64, error) {
 	// A credit counts unless it has expired (expires_at <= now). NULL expiry never expires.
 	rows, err := s.db.QueryContext(ctx, `SELECT currency, SUM(amount_cents) FROM billing_credits
-		WHERE (? = '' OR partition = ?) AND customer_id = ? AND (expires_at IS NULL OR expires_at > ?)
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? AND (expires_at IS NULL OR expires_at > ?)
 		GROUP BY currency`, partition, partition, customerID, now.UnixNano())
 	if err != nil {
 		return nil, err

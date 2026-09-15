@@ -52,7 +52,16 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
-func partitionMatch(want, have string) bool { return want == "" || want == have }
+// partitionMatch reports whether a row held under partition `have` is visible to a
+// caller asking for partition `want`. Every customer, subscription, product, price,
+// credit, usage and discount lookup in this store filters through it.
+//
+// An empty `want` names no partition and matches nothing. SQLStore answers the same
+// way — its predicates read (? <> '' AND partition = ?) — and the two have to agree,
+// because a test written against this store is what certifies the other's behaviour.
+// Rows here decide what is charged and to whom, so a `want` that matched everything
+// would read and mutate another partition's money.
+func partitionMatch(want, have string) bool { return want != "" && want == have }
 
 // ── Customers ──
 

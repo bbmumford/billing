@@ -130,3 +130,46 @@ func TestCredit_BalanceExcludesExpired(t *testing.T) {
 		}
 	})
 }
+
+// TestCustomer_EmptyPartitionReachesNothing pins the partition boundary on billing
+// records. An empty partition used to drop the partition predicate across
+// twenty-nine store queries, so a caller that left the field unset read and
+// mutated another partition's customers, subscriptions, credits and usage.
+//
+// It compares three outcomes rather than checking each call against what that call
+// expected: the owning partition reads its customer, a wrong one and an empty one
+// do not, and the empty one must not behave like the owning one. A case that only
+// asserts the intended call succeeded cannot tell a working filter from one that
+// admits everyone — which is how twenty-nine of these survived.
+func TestCustomer_EmptyPartitionReachesNothing(t *testing.T) {
+	eachStore(t, func(t *testing.T, s Store) {
+		c := &Customer{Partition: "acme", UserID: "u1", BillingEmail: "a@x", Currency: "usd"}
+		if err := s.CreateCustomer(ctx, c); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if _, err := s.GetCustomer(ctx, "acme", c.ID); err != nil {
+			t.Fatalf("the owning partition must read its own customer: %v", err)
+		}
+		if _, err := s.GetCustomer(ctx, "globex", c.ID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("a different partition must not read the customer, got %v", err)
+		}
+		if _, err := s.GetCustomer(ctx, "", c.ID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("an empty partition must not read the customer, got %v", err)
+		}
+		if _, err := s.GetCustomerByUser(ctx, "", "u1"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("an empty partition must not find a customer by user, got %v", err)
+		}
+
+		// The mutate half. A write across the boundary changes what another
+		// partition is charged, so it is asserted separately from the reads.
+		if err := s.SetCustomerProviderRef(ctx, "", c.ID, "cus_stolen"); err == nil {
+			if got, gerr := s.GetCustomer(ctx, "acme", c.ID); gerr == nil && got.ProviderRef == "cus_stolen" {
+				t.Fatal("an empty partition rewrote another partition's provider ref")
+			}
+		}
+		if err := s.SetCustomerProviderRef(ctx, "acme", c.ID, "cus_123"); err != nil {
+			t.Fatalf("the owning partition must set its own provider ref: %v", err)
+		}
+	})
+}

@@ -203,7 +203,7 @@ func (s *SQLStore) CreateCustomer(ctx context.Context, c *Customer) error {
 
 func (s *SQLStore) GetCustomer(ctx context.Context, partition, id string) (*Customer, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+customerCols+` FROM billing_customers
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	c, err := scanCustomer2(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -226,7 +226,7 @@ func (s *SQLStore) GetCustomerByProviderRef(ctx context.Context, providerRef str
 
 func (s *SQLStore) GetCustomerByUser(ctx context.Context, partition, userID string) (*Customer, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+customerCols+` FROM billing_customers
-		WHERE (? = '' OR partition = ?) AND user_id = ? LIMIT 1`, partition, partition, userID)
+		WHERE (? <> '' AND partition = ?) AND user_id = ? LIMIT 1`, partition, partition, userID)
 	c, err := scanCustomer2(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -236,7 +236,7 @@ func (s *SQLStore) GetCustomerByUser(ctx context.Context, partition, userID stri
 
 func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, partition, id, providerRef string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET provider_ref = ?, updated_at = ?
-		WHERE id = ? AND (? = '' OR partition = ?)`, providerRef, time.Now().UnixNano(), id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, providerRef, time.Now().UnixNano(), id, partition, partition)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, partition, id, pr
 func (s *SQLStore) UpdateCustomer(ctx context.Context, c *Customer) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET user_id=?, org_id=?, provider_ref=?,
 		billing_email=?, billing_name=?, currency=?, tax_id=?, updated_at=?
-		WHERE id = ? AND (? = '' OR partition = ?)`,
+		WHERE id = ? AND (? <> '' AND partition = ?)`,
 		c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency, c.TaxID,
 		time.Now().UnixNano(), c.ID, c.Partition, c.Partition)
 	if err != nil {
@@ -298,7 +298,7 @@ const productCols = `id, partition, service_id, name, description, active, metad
 
 func (s *SQLStore) GetProduct(ctx context.Context, partition, id string) (*Product, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+productCols+` FROM billing_products
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	p, err := scanProduct(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -307,7 +307,7 @@ func (s *SQLStore) GetProduct(ctx context.Context, partition, id string) (*Produ
 }
 
 func (s *SQLStore) ListProducts(ctx context.Context, partition string, activeOnly bool) ([]*Product, error) {
-	where := `(? = '' OR partition = ?)`
+	where := `(? <> '' AND partition = ?)`
 	args := []any{partition, partition}
 	if activeOnly {
 		where += ` AND active = 1`
@@ -359,7 +359,7 @@ func (s *SQLStore) CreatePrice(ctx context.Context, p *Price) error {
 
 func (s *SQLStore) GetPrice(ctx context.Context, partition, id string) (*Price, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+priceCols+` FROM billing_prices
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	p, err := scanPrice(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -369,7 +369,7 @@ func (s *SQLStore) GetPrice(ctx context.Context, partition, id string) (*Price, 
 
 func (s *SQLStore) ListPrices(ctx context.Context, partition, productID string) ([]*Price, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+priceCols+` FROM billing_prices
-		WHERE (? = '' OR partition = ?) AND product_id = ? ORDER BY amount_cents ASC`, partition, partition, productID)
+		WHERE (? <> '' AND partition = ?) AND product_id = ? ORDER BY amount_cents ASC`, partition, partition, productID)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +387,7 @@ func (s *SQLStore) ListPrices(ctx context.Context, partition, productID string) 
 
 func (s *SQLStore) SetPriceProviderRef(ctx context.Context, partition, id, providerRef string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_prices SET provider_ref = ?
-		WHERE id = ? AND (? = '' OR partition = ?)`, providerRef, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, providerRef, id, partition, partition)
 	if err != nil {
 		return err
 	}
@@ -439,7 +439,7 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 
 func (s *SQLStore) GetSubscription(ctx context.Context, partition, id string) (*Subscription, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM billing_subscriptions
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	sub, err := scanSub(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -449,7 +449,7 @@ func (s *SQLStore) GetSubscription(ctx context.Context, partition, id string) (*
 
 func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, customerID string) ([]*Subscription, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+subCols+` FROM billing_subscriptions
-		WHERE (? = '' OR partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? ORDER BY created_at DESC`, partition, partition, customerID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +468,7 @@ func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, c
 func (s *SQLStore) UpdateSubscription(ctx context.Context, sub *Subscription) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_subscriptions SET price_id=?, provider_ref=?,
 		status=?, quantity=?, current_period_start=?, current_period_end=?, cancel_at_period_end=?,
-		updated_at=?, canceled_at=? WHERE id = ? AND (? = '' OR partition = ?)`,
+		updated_at=?, canceled_at=? WHERE id = ? AND (? <> '' AND partition = ?)`,
 		sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
 		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), time.Now().UnixNano(),
 		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition)
@@ -520,7 +520,7 @@ func (s *SQLStore) AddPaymentMethod(ctx context.Context, pm *PaymentMethod) erro
 	// One default per customer: clear the others before this method claims it.
 	if pm.IsDefault {
 		if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
-			WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+			WHERE (? <> '' AND partition = ?) AND customer_id = ? AND active = 1`,
 			now.UnixNano(), pm.Partition, pm.Partition, pm.CustomerID); err != nil {
 			return err
 		}
@@ -537,7 +537,7 @@ func (s *SQLStore) AddPaymentMethod(ctx context.Context, pm *PaymentMethod) erro
 
 func (s *SQLStore) ListPaymentMethods(ctx context.Context, partition, customerID string) ([]*PaymentMethod, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+pmCols+` FROM billing_payment_methods
-		WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1 ORDER BY created_at DESC`,
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? AND active = 1 ORDER BY created_at DESC`,
 		partition, partition, customerID)
 	if err != nil {
 		return nil, err
@@ -556,7 +556,7 @@ func (s *SQLStore) ListPaymentMethods(ctx context.Context, partition, customerID
 
 func (s *SQLStore) GetPaymentMethod(ctx context.Context, partition, id string) (*PaymentMethod, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+pmCols+` FROM billing_payment_methods
-		WHERE id = ? AND (? = '' OR partition = ?)`, id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, id, partition, partition)
 	pm, err := scanPM(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -572,12 +572,12 @@ func (s *SQLStore) SetDefaultPaymentMethod(ctx context.Context, partition, custo
 	defer tx.Rollback()
 	now := time.Now().UnixNano()
 	if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
-		WHERE (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+		WHERE (? <> '' AND partition = ?) AND customer_id = ? AND active = 1`,
 		now, partition, partition, customerID); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=1, updated_at=?
-		WHERE id = ? AND (? = '' OR partition = ?) AND customer_id = ? AND active = 1`,
+		WHERE id = ? AND (? <> '' AND partition = ?) AND customer_id = ? AND active = 1`,
 		now, id, partition, partition, customerID)
 	if err != nil {
 		return err
@@ -590,7 +590,7 @@ func (s *SQLStore) SetDefaultPaymentMethod(ctx context.Context, partition, custo
 
 func (s *SQLStore) RemovePaymentMethod(ctx context.Context, partition, id string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_payment_methods SET active=0, is_default=0, updated_at=?
-		WHERE id = ? AND (? = '' OR partition = ?)`, time.Now().UnixNano(), id, partition, partition)
+		WHERE id = ? AND (? <> '' AND partition = ?)`, time.Now().UnixNano(), id, partition, partition)
 	if err != nil {
 		return err
 	}
@@ -619,7 +619,7 @@ func (s *SQLStore) UpsertDiscount(ctx context.Context, d *Discount) error {
 func (s *SQLStore) GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT discount_id, partition, code, name, type, value,
 		applies_to, max_uses, current_uses, active FROM billing_discounts
-		WHERE discount_id = ? AND (? = '' OR partition = ?)`, discountID, partition, partition)
+		WHERE discount_id = ? AND (? <> '' AND partition = ?)`, discountID, partition, partition)
 	var d Discount
 	var active int
 	if err := row.Scan(&d.DiscountID, &d.Partition, &d.Code, &d.Name, &d.Type, &d.Value,
@@ -639,7 +639,7 @@ func (s *SQLStore) IsDiscountApplied(ctx context.Context, partition, subscriptio
 	}
 	var id string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM billing_applied_discounts
-		WHERE (? = '' OR partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
+		WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
 		partition, partition, subscriptionRef, discountID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -661,7 +661,7 @@ func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscri
 	defer tx.Rollback()
 	var existing string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM billing_applied_discounts
-		WHERE (? = '' OR partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
+		WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
 		partition, partition, subscriptionRef, discountID).Scan(&existing)
 	if err == nil {
 		return nil, ErrDiscountAlreadyApplied
@@ -675,7 +675,7 @@ func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscri
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses + 1
-		WHERE discount_id = ? AND (? = '' OR partition = ?)`, discountID, partition, partition); err != nil {
+		WHERE discount_id = ? AND (? <> '' AND partition = ?)`, discountID, partition, partition); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
