@@ -10,7 +10,8 @@ import (
 // SQLStore is the durable default Store over any database/sql driver — the shipped standalone store. The
 // package imports only database/sql (stdlib); the APP supplies the opened *sql.DB and registers the
 // driver, so billing pulls no driver dependency yet works out of the box. Partition is an opaque column the
-// store filters on but never interprets ("" matches any partition). Money is INTEGER minor units; times
+// store filters on but never interprets ("" matches nothing: the predicates read
+// (? <> '' AND partition = ?)). Money is INTEGER minor units; times
 // persist as INTEGER Unix nanos with NULL for an unset *time.Time; metadata as JSON. Only sealed payment
 // material reaches the ledger table. The Store interface stays the escape-hatch for a mesh gateway or
 // MemStore.

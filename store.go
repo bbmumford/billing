@@ -10,8 +10,11 @@ import (
 var ErrNotFound = errors.New("billing: not found")
 
 // Store is the persistence contract for the billing money-state. The Partition is opaque and the store
-// filters on it, never interprets it; an empty partition ("") on an partition-scoped read means "any partition"
-// (the admin/all-scope view). Only sealed material reaches the store for the payment ledger (encrypted
+// filters on it, never interprets it; an empty partition ("") on a partition-scoped read matches NOTHING —
+// the predicates read (? <> '' AND partition = ?), so an unscoped read returns no rows rather than every
+// partition's. These rows are money state: a blank partition that matched everything would read and
+// mutate another partition's customers, subscriptions and ledger. There is no unscoped read; a caller
+// that must cross partitions names the partition it means. Only sealed material reaches the store for the payment ledger (encrypted
 // charge id / client secret). A consumer supplies a *sql.DB store (the shipped default), a mesh-RPC
 // gateway, or the reference MemStore. The payment PROVIDER (Stripe/etc.) is a separate injected seam,
 // not part of this contract.
