@@ -10,8 +10,8 @@ import (
 // SQLStore is the durable default Store over any database/sql driver — the shipped standalone store. The
 // package imports only database/sql (stdlib); the APP supplies the opened *sql.DB and registers the
 // driver, so billing pulls no driver dependency yet works out of the box. Partition is an opaque column the
-// store filters on but never interprets ("" matches nothing: the predicates read
-// (? <> '' AND partition = ?)). Money is INTEGER minor units; times
+// store filters on but never interprets; an empty partition matches nothing, because every
+// partition-scoped predicate rejects an empty parameter before comparing. Money is INTEGER minor units; times
 // persist as INTEGER Unix nanos with NULL for an unset *time.Time; metadata as JSON. Only sealed payment
 // material reaches the ledger table. The Store interface stays the escape-hatch for a mesh gateway or
 // MemStore.
@@ -27,7 +27,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS billing_customers (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL DEFAULT '',
-			org_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
+			provider_ref TEXT NOT NULL DEFAULT '',
 			billing_email TEXT NOT NULL DEFAULT '', billing_name TEXT NOT NULL DEFAULT '',
 			currency TEXT NOT NULL DEFAULT '', tax_id TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
@@ -172,12 +172,12 @@ func readMap(s string) map[string]string {
 
 // ── Customers ──
 
-const customerCols = `id, partition, user_id, org_id, provider_ref, billing_email, billing_name, currency, tax_id, created_at, updated_at`
+const customerCols = `id, partition, user_id, provider_ref, billing_email, billing_name, currency, tax_id, created_at, updated_at`
 
 func scanCustomer2(sc interface{ Scan(...any) error }) (*Customer, error) {
 	var c Customer
 	var created, updated int64
-	if err := sc.Scan(&c.ID, &c.Partition, &c.UserID, &c.OrgID, &c.ProviderRef, &c.BillingEmail,
+	if err := sc.Scan(&c.ID, &c.Partition, &c.UserID, &c.ProviderRef, &c.BillingEmail,
 		&c.BillingName, &c.Currency, &c.TaxID, &created, &updated); err != nil {
 		return nil, err
 	}
@@ -196,8 +196,8 @@ func (s *SQLStore) CreateCustomer(ctx context.Context, c *Customer) error {
 	}
 	c.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_customers (`+customerCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Partition, c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		c.ID, c.Partition, c.UserID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
 		c.TaxID, tnanos(c.CreatedAt), tnanos(c.UpdatedAt))
 	return err
 }
@@ -248,10 +248,10 @@ func (s *SQLStore) SetCustomerProviderRef(ctx context.Context, partition, id, pr
 }
 
 func (s *SQLStore) UpdateCustomer(ctx context.Context, c *Customer) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET user_id=?, org_id=?, provider_ref=?,
+	res, err := s.db.ExecContext(ctx, `UPDATE billing_customers SET user_id=?, provider_ref=?,
 		billing_email=?, billing_name=?, currency=?, tax_id=?, updated_at=?
 		WHERE id = ? AND (? <> '' AND partition = ?)`,
-		c.UserID, c.OrgID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency, c.TaxID,
+		c.UserID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency, c.TaxID,
 		time.Now().UnixNano(), c.ID, c.Partition, c.Partition)
 	if err != nil {
 		return err

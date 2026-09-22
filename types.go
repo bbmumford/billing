@@ -12,15 +12,18 @@ package billing
 
 import "time"
 
-// Customer is a billing customer. Partition is the opaque partition-scope; UserID/OrgID are opaque grouping
-// ids; ProviderRef is the opaque payment-provider customer id (e.g. a Stripe customer). Currency is the
-// ISO-4217 code the customer is billed in.
+// Customer is a billing relationship. Partition is the scope it belongs to and
+// this package never interprets it: a deployment may partition by team, family,
+// project or anything else, and the one field carries all of them. UserID is the
+// principal GetCustomerByUser looks a customer up by, within a partition.
+// ProviderRef is the payment provider's own id
+// for this customer, opaque here because the provider mints it. Currency is the
+// ISO-4217 code billed in.
 type Customer struct {
 	ID           string
-	Partition    string // opaque partition-scope (was the per-tenant billing DB)
+	Partition    string
 	UserID       string
-	OrgID        string
-	ProviderRef  string // opaque provider customer id
+	ProviderRef  string
 	BillingEmail string
 	BillingName  string
 	Currency     string
