@@ -41,6 +41,12 @@ type Store interface {
 	GetSubscription(ctx context.Context, partition, id string) (*Subscription, error)
 	ListSubscriptionsByCustomer(ctx context.Context, partition, customerID string) ([]*Subscription, error)
 	UpdateSubscription(ctx context.Context, s *Subscription) error
+	// UpdateSubscriptionItem writes a subscription's price and quantity within the partition and no
+	// other column; ErrNotFound when the partition holds no subscription with that id. A caller
+	// changing the item uses it rather than UpdateSubscription, whose row write carries the status:
+	// a row read before the provider's event and written back after it would put back the status the
+	// event replaced. billinghost's UpdateSubscription is its caller.
+	UpdateSubscriptionItem(ctx context.Context, partition, id, priceID string, quantity int64) error
 
 	// ── Invoices ──
 	CreateInvoice(ctx context.Context, inv *Invoice, items []*InvoiceItem) error
