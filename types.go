@@ -88,6 +88,23 @@ type Subscription struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	CanceledAt         *time.Time
+	// StatusChangedAt is the instant Status took its present value: the creation
+	// write, then each UpdateSubscription whose Status differs from the stored one.
+	// UpdatedAt cannot stand in for it, because UpdateSubscription and
+	// UpdateSubscriptionItem rewrite UpdatedAt on every write, a period or price
+	// change included.
+	StatusChangedAt time.Time
+	// EnteredUnpaidAt is the instant the subscription entered the unpaid statuses
+	// (see unpaid.go) from any other status. It holds while the status moves
+	// between them and is nil outside them, so it is the start of the present
+	// unpaid run; UnpaidSince reads it.
+	//
+	// The store writes both instants from its own clock and the stored row, and
+	// ignores the values a caller hands to CreateSubscription or UpdateSubscription:
+	// the billing host's webhook applier writes back a whole row it read, so a value
+	// taken from the caller would be whatever that read held, and ListUnpaidSince
+	// selects by this clock.
+	EnteredUnpaidAt *time.Time
 }
 
 // Invoice is an issued invoice. AmountDueCents/AmountPaidCents are minor units; Status is opaque

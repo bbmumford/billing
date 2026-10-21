@@ -7,15 +7,19 @@ var ErrInvalidSubscriptionStatus = errors.New("billing: invalid subscription sta
 
 // validSubscriptionStatuses is the allowed lifecycle set (from the source domain). Kept as data, not an
 // enum type, so the Subscription.Status field stays an opaque string the store never interprets while
-// the service still rejects an unknown status.
+// the service still rejects an unknown status. unpaid and incomplete_expired are statuses the payment
+// provider reports and the billing host's webhook applier stores as reported; unpaid is one of the two
+// statuses the unpaid clock (unpaid.go) counts.
 var validSubscriptionStatuses = map[string]bool{
-	"incomplete":        true,
-	"trialing":          true,
-	"active":            true,
-	"past_due":          true,
-	"downgrade_pending": true,
-	"paused":            true,
-	"canceled":          true,
+	"incomplete":         true,
+	"incomplete_expired": true,
+	"trialing":           true,
+	"active":             true,
+	"past_due":           true,
+	"unpaid":             true,
+	"downgrade_pending":  true,
+	"paused":             true,
+	"canceled":           true,
 }
 
 // ValidSubscriptionStatus reports whether a status is in the allowed lifecycle set.

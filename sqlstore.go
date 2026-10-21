@@ -15,10 +15,16 @@ import (
 // persist as INTEGER Unix nanos with NULL for an unset *time.Time; metadata as JSON. Only sealed payment
 // material reaches the ledger table. The Store interface stays the escape-hatch for a mesh gateway or
 // MemStore.
-type SQLStore struct{ db *sql.DB }
+type SQLStore struct {
+	db *sql.DB
+	// now is the clock CreateSubscription and UpdateSubscription stamp a
+	// subscription's status instants with; NewSQLStore sets time.Now, and the
+	// package's tests set a fixed clock so both stores write the same instants.
+	now func() time.Time
+}
 
 // NewSQLStore builds a store over an opened *sql.DB. Call InitSchema once before use.
-func NewSQLStore(db *sql.DB) *SQLStore { return &SQLStore{db: db} }
+func NewSQLStore(db *sql.DB) *SQLStore { return &SQLStore{db: db, now: time.Now} }
 
 var _ Store = (*SQLStore)(nil)
 
@@ -57,9 +63,11 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			status TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0,
 			current_period_start INTEGER, current_period_end INTEGER,
 			cancel_at_period_end INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
-			updated_at INTEGER NOT NULL DEFAULT 0, canceled_at INTEGER
+			updated_at INTEGER NOT NULL DEFAULT 0, canceled_at INTEGER,
+			status_changed_at INTEGER NOT NULL DEFAULT 0, unpaid_since INTEGER
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_subs_customer ON billing_subscriptions(partition, customer_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_billing_subs_unpaid ON billing_subscriptions(unpaid_since)`,
 		`CREATE TABLE IF NOT EXISTS billing_invoices (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			subscription_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
@@ -401,17 +409,20 @@ func (s *SQLStore) SetPriceProviderRef(ctx context.Context, partition, id, provi
 // ── Subscriptions ──
 
 const subCols = `id, partition, customer_id, price_id, provider_ref, status, quantity,
-	current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at, canceled_at`
+	current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at, canceled_at,
+	status_changed_at, unpaid_since`
 
 func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 	var s Subscription
 	var cancel int
-	var created, updated int64
-	var cps, cpe, canceled sql.NullInt64
+	var created, updated, statusChanged int64
+	var cps, cpe, canceled, unpaidSince sql.NullInt64
 	if err := sc.Scan(&s.ID, &s.Partition, &s.CustomerID, &s.PriceID, &s.ProviderRef, &s.Status,
-		&s.Quantity, &cps, &cpe, &cancel, &created, &updated, &canceled); err != nil {
+		&s.Quantity, &cps, &cpe, &cancel, &created, &updated, &canceled, &statusChanged, &unpaidSince); err != nil {
 		return nil, err
 	}
+	s.StatusChangedAt = fromNanos(statusChanged)
+	s.EnteredUnpaidAt = fromNullNanos(unpaidSince)
 	s.CancelAtPeriodEnd = cancel != 0
 	s.CurrentPeriodStart = fromNullNanos(cps)
 	s.CurrentPeriodEnd = fromNullNanos(cpe)
@@ -425,16 +436,18 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 	if sub.ID == "" {
 		sub.ID = randomID()
 	}
-	now := time.Now()
+	now := s.now()
 	if sub.CreatedAt.IsZero() {
 		sub.CreatedAt = now
 	}
 	sub.UpdatedAt = now
+	sub.StatusChangedAt, sub.EnteredUnpaidAt = statusClock(nil, sub.Status, now)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sub.ID, sub.Partition, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
 		ptrNanos(sub.CurrentPeriodStart), ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd),
-		tnanos(sub.CreatedAt), tnanos(sub.UpdatedAt), ptrNanos(sub.CanceledAt))
+		tnanos(sub.CreatedAt), tnanos(sub.UpdatedAt), ptrNanos(sub.CanceledAt),
+		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt))
 	return err
 }
 
@@ -466,12 +479,27 @@ func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, c
 	return out, rows.Err()
 }
 
+// UpdateSubscription writes the row and moves its status instants by statusClock's
+// rule, stated here as SQL over the stored columns: every right-hand side of a SET
+// reads the row as stored before this statement, so the stored status is compared
+// and the stored unpaid_since carried in the same statement that writes the new
+// status, and an event landing between a caller's read and this write is what the
+// comparison sees. The caller's StatusChangedAt and EnteredUnpaidAt are not read.
 func (s *SQLStore) UpdateSubscription(ctx context.Context, sub *Subscription) error {
+	now := s.now().UnixNano()
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_subscriptions SET price_id=?, provider_ref=?,
+		status_changed_at = CASE WHEN status = ? THEN status_changed_at ELSE ? END,
+		unpaid_since = CASE
+			WHEN ? NOT IN (`+unpaidStatusSQL+`) THEN NULL
+			WHEN status IN (`+unpaidStatusSQL+`) AND unpaid_since IS NOT NULL THEN unpaid_since
+			ELSE ? END,
 		status=?, quantity=?, current_period_start=?, current_period_end=?, cancel_at_period_end=?,
 		updated_at=?, canceled_at=? WHERE id = ? AND (? <> '' AND partition = ?)`,
-		sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
-		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), time.Now().UnixNano(),
+		sub.PriceID, sub.ProviderRef,
+		sub.Status, now,
+		sub.Status, now,
+		sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
+		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), now,
 		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition)
 	if err != nil {
 		return err

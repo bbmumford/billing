@@ -248,6 +248,7 @@ func (m *MemStore) CreateSubscription(_ context.Context, s *Subscription) error 
 		s.CreatedAt = now
 	}
 	s.UpdatedAt = now
+	s.StatusChangedAt, s.EnteredUnpaidAt = statusClock(nil, s.Status, now)
 	m.subscriptions[s.ID] = cloneSubscription(s)
 	return nil
 }
@@ -285,6 +286,7 @@ func (m *MemStore) UpdateSubscription(_ context.Context, s *Subscription) error 
 	upd := cloneSubscription(s)
 	upd.CreatedAt = e.CreatedAt
 	upd.UpdatedAt = m.now()
+	upd.StatusChangedAt, upd.EnteredUnpaidAt = statusClock(e, s.Status, upd.UpdatedAt)
 	m.subscriptions[s.ID] = upd
 	return nil
 }
@@ -533,6 +535,7 @@ func cloneSubscription(s *Subscription) *Subscription {
 	cp.CurrentPeriodStart = clonePtr(s.CurrentPeriodStart)
 	cp.CurrentPeriodEnd = clonePtr(s.CurrentPeriodEnd)
 	cp.CanceledAt = clonePtr(s.CanceledAt)
+	cp.EnteredUnpaidAt = clonePtr(s.EnteredUnpaidAt)
 	return &cp
 }
 
