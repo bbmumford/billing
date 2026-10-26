@@ -28,8 +28,10 @@ type PaymentProvider interface {
 	CreatePaymentIntent(ctx context.Context, in PaymentIntentInput) (PaymentIntentResult, error)
 	// CreateSubscription subscribes a provider customer to a provider price.
 	CreateSubscription(ctx context.Context, in SubscriptionInput) (SubscriptionResult, error)
-	// CancelSubscription cancels a provider subscription now, or at period end.
-	CancelSubscription(ctx context.Context, providerRef string, atPeriodEnd bool) error
+	// CancelSubscription cancels a provider subscription at once, or at period end, and answers the
+	// cancel fields the provider holds afterwards (CancelResult); Service.CancelSubscription stores
+	// exactly those, so the row carries the provider's answer and no value the caller inferred.
+	CancelSubscription(ctx context.Context, providerRef string, atPeriodEnd bool) (CancelResult, error)
 }
 
 // PaymentIntentInput/Result carry the neutral fields of a payment-intent creation; all provider ids are

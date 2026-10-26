@@ -14,10 +14,20 @@ type revEncryptor struct{}
 func (revEncryptor) Encrypt(p string) (string, error) { return "enc:" + p, nil }
 func (revEncryptor) Decrypt(c string) (string, error) { return strings.TrimPrefix(c, "enc:"), nil }
 
-// fakeProvider is a test PaymentProvider that counts intent creations so idempotency can be asserted.
+// fakeProvider is a test PaymentProvider that counts intent creations so idempotency can be asserted,
+// and records every cancel it is asked for, answering the CancelResult or error a test sets.
 type fakeProvider struct {
-	intents int
-	subs    int
+	intents      int
+	subs         int
+	cancels      []cancelCall
+	cancelAnswer CancelResult
+	cancelErr    error
+}
+
+// cancelCall is one CancelSubscription the fakeProvider is asked for.
+type cancelCall struct {
+	providerRef string
+	atPeriodEnd bool
 }
 
 func (f *fakeProvider) EnsureCustomer(_ context.Context, c *Customer) (string, error) {
@@ -31,8 +41,12 @@ func (f *fakeProvider) CreateSubscription(_ context.Context, in SubscriptionInpu
 	f.subs++
 	return SubscriptionResult{ProviderRef: "sub_1", Status: "active"}, nil
 }
-func (f *fakeProvider) CancelSubscription(_ context.Context, providerRef string, atPeriodEnd bool) error {
-	return nil
+func (f *fakeProvider) CancelSubscription(_ context.Context, providerRef string, atPeriodEnd bool) (CancelResult, error) {
+	f.cancels = append(f.cancels, cancelCall{providerRef: providerRef, atPeriodEnd: atPeriodEnd})
+	if f.cancelErr != nil {
+		return CancelResult{}, f.cancelErr
+	}
+	return f.cancelAnswer, nil
 }
 
 func newService(t *testing.T, store Store, prov PaymentProvider) *Service {

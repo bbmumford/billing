@@ -47,6 +47,12 @@ type Store interface {
 	// a row read before the provider's event and written back after it would put back the status the
 	// event replaced. billinghost's UpdateSubscription is its caller.
 	UpdateSubscriptionItem(ctx context.Context, partition, id, priceID string, quantity int64) error
+	// UpdateSubscriptionCancel writes a subscription's cancel_at_period_end and canceled_at within the
+	// partition and no other column; ErrNotFound when the partition holds no subscription with that
+	// id. It is the write Service.CancelSubscription makes after the provider has cancelled, with the
+	// two values the provider answered, for the same reason UpdateSubscriptionItem exists: the whole-row
+	// UpdateSubscription carries the status, and the status is the provider event's to write.
+	UpdateSubscriptionCancel(ctx context.Context, partition, id string, cancelAtPeriodEnd bool, canceledAt *time.Time) error
 
 	// ── Invoices ──
 	CreateInvoice(ctx context.Context, inv *Invoice, items []*InvoiceItem) error
