@@ -20,6 +20,10 @@ var ErrNotFound = errors.New("billing: not found")
 // not part of this contract.
 type Store interface {
 	// ── Customers ──
+	// CreateCustomer stores c as the partition's customer for its subject (UserID).
+	// One customer per (partition, subject): a second create for the pair answers
+	// ErrCustomerExists and writes nothing. Service.EnsureCustomer is its caller, so
+	// the partition's callers that name no subject share one customer.
 	CreateCustomer(ctx context.Context, c *Customer) error
 	GetCustomer(ctx context.Context, partition, id string) (*Customer, error)
 	GetCustomerByProviderRef(ctx context.Context, providerRef string) (*Customer, error)

@@ -36,7 +36,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			provider_ref TEXT NOT NULL DEFAULT '',
 			billing_email TEXT NOT NULL DEFAULT '', billing_name TEXT NOT NULL DEFAULT '',
 			currency TEXT NOT NULL DEFAULT '', tax_id TEXT NOT NULL DEFAULT '',
-			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
+			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(partition, user_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_customers_partition ON billing_customers(partition, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_customers_provref ON billing_customers(provider_ref)`,
@@ -194,20 +195,37 @@ func scanCustomer2(sc interface{ Scan(...any) error }) (*Customer, error) {
 	return &c, nil
 }
 
+// CreateCustomer stores c as the partition's customer for its subject (user_id) and
+// answers ErrCustomerExists, writing nothing, when the partition already holds one
+// for the pair. The insert is conditioned on the pair's absence in the one
+// statement, so two creates racing for the pair cannot both insert, and the fresh
+// schema's UNIQUE(partition, user_id) holds a row written past this method to the
+// same rule. The id and the instants are assigned to c only once the row is
+// stored. Service.EnsureCustomer is its caller and reads ErrCustomerExists as the
+// concurrent caller's row to answer.
 func (s *SQLStore) CreateCustomer(ctx context.Context, c *Customer) error {
-	if c.ID == "" {
-		c.ID = randomID()
+	id := c.ID
+	if id == "" {
+		id = randomID()
 	}
 	now := time.Now()
-	if c.CreatedAt.IsZero() {
-		c.CreatedAt = now
+	created := c.CreatedAt
+	if created.IsZero() {
+		created = now
 	}
-	c.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_customers (`+customerCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.Partition, c.UserID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
-		c.TaxID, tnanos(c.CreatedAt), tnanos(c.UpdatedAt))
-	return err
+	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_customers (`+customerCols+`)
+		SELECT ?,?,?,?,?,?,?,?,?,?
+		WHERE NOT EXISTS (SELECT 1 FROM billing_customers WHERE partition = ? AND user_id = ?)`,
+		id, c.Partition, c.UserID, c.ProviderRef, c.BillingEmail, c.BillingName, c.Currency,
+		c.TaxID, tnanos(created), tnanos(now), c.Partition, c.UserID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCustomerExists
+	}
+	c.ID, c.CreatedAt, c.UpdatedAt = id, created, now
+	return nil
 }
 
 func (s *SQLStore) GetCustomer(ctx context.Context, partition, id string) (*Customer, error) {

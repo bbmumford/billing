@@ -66,9 +66,18 @@ func partitionMatch(want, have string) bool { return want != "" && want == have 
 
 // ── Customers ──
 
+// CreateCustomer is the reference behaviour SQLStore's is held to: the partition's
+// customer for the subject (UserID) is stored once, a second create for the pair
+// answers ErrCustomerExists and changes nothing, and the id and instants are
+// assigned to c only for a row that is stored.
 func (m *MemStore) CreateCustomer(_ context.Context, c *Customer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, e := range m.customers {
+		if e.Partition == c.Partition && e.UserID == c.UserID {
+			return ErrCustomerExists
+		}
+	}
 	if c.ID == "" {
 		c.ID = m.newID()
 	}

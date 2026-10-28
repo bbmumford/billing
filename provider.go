@@ -108,11 +108,41 @@ func NewService(c Config) (*Service, error) {
 	return s, nil
 }
 
-// EnsureCustomer persists the local customer (if new) and ensures a provider customer exists, storing
-// its opaque ProviderRef. A customer that already carries a ProviderRef is returned unchanged.
+// EnsureCustomer is the get-or-create of the customer keyed by (Partition, UserID):
+// it answers the partition's stored customer for the subject when one exists, else
+// stores c as that customer, and in either case makes sure the row carries a
+// provider customer reference, asking the provider only while the row has none, so
+// the pair ends with one row and one provider customer across any number of calls.
+// It consumes a Customer with a Partition (ErrNoPartition otherwise) and a subject,
+// empty for a partition's subjectless customer, reads the pair through
+// Store.GetCustomerByUser, and takes a Customer carrying an ID as the stored row.
+// The billing host's EnsureCustomer handler is its caller, with the sealed
+// partition and the request's subject; every caller of that operation dials it
+// before each read of the partition's subscription, so a call that stored a new
+// customer each time would answer a customer holding no subscription and create a
+// provider customer to match. A create refused with ErrCustomerExists is a
+// concurrent caller's row landing first: the pair is re-read and that row answered.
+// TODO: two concurrent first calls that both find the row without a provider
+// reference each ask the provider and the reference written last wins; the rail
+// sets no idempotency key on the provider's customer create.
 func (s *Service) EnsureCustomer(ctx context.Context, c *Customer) (*Customer, error) {
+	if c.Partition == "" {
+		return nil, ErrNoPartition
+	}
 	if c.ID == "" {
-		if err := s.store.CreateCustomer(ctx, c); err != nil {
+		stored, err := s.store.GetCustomerByUser(ctx, c.Partition, c.UserID)
+		switch {
+		case err == nil:
+			c = stored
+		case errors.Is(err, ErrNotFound):
+			if cerr := s.store.CreateCustomer(ctx, c); errors.Is(cerr, ErrCustomerExists) {
+				if c, err = s.store.GetCustomerByUser(ctx, c.Partition, c.UserID); err != nil {
+					return nil, err
+				}
+			} else if cerr != nil {
+				return nil, cerr
+			}
+		default:
 			return nil, err
 		}
 	}
