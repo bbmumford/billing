@@ -56,6 +56,12 @@ type SubscriptionInput struct {
 	CustomerRef string
 	PriceRef    string
 	Quantity    int64
+	// BillingProfileID is the billing profile the subscription pays for, as the
+	// caller of Service.Subscribe names it; "" for a subscription paying for no
+	// profile. The provider carries it on its subscription record so the
+	// consumer that reads the provider's subscription events can link the
+	// profile from the event alone, which no other field of the event answers.
+	BillingProfileID string
 }
 
 type SubscriptionResult struct {
@@ -241,9 +247,12 @@ func (s *Service) RevealChargeRef(row *PaymentLedgerRow) (string, error) {
 	return s.reveal(row.ChargeRefSealed)
 }
 
-// Subscribe creates a provider subscription and persists the local Subscription record from the result.
-func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64) (*Subscription, error) {
-	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity})
+// Subscribe creates a provider subscription and persists the local Subscription
+// record from the result. billingProfileID is handed to the provider as
+// SubscriptionInput.BillingProfileID and stored nowhere here: the local row
+// carries no profile, the provider's subscription record does.
+func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64, billingProfileID string) (*Subscription, error) {
+	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity, BillingProfileID: billingProfileID})
 	if err != nil {
 		return nil, err
 	}
