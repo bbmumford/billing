@@ -9,6 +9,12 @@ import (
 // ErrNotFound is returned by single-record reads when nothing matches.
 var ErrNotFound = errors.New("billing: not found")
 
+// ErrStaleEvent is UpdateSubscription's refusal of a write whose
+// Subscription.EventCreatedAt is earlier than the instant the stored row carries;
+// nothing is written. billinghost's webhook applier acknowledges the event on it,
+// as it does for an instant it compared itself before writing.
+var ErrStaleEvent = errors.New("billing: event created earlier than the one applied")
+
 // Store is the persistence contract for the billing money-state. The Partition is opaque and the store
 // filters on it, never interprets it; an empty partition ("") on a partition-scoped read matches NOTHING —
 // the predicates read (? <> '' AND partition = ?), so an unscoped read returns no rows rather than every
@@ -44,6 +50,12 @@ type Store interface {
 	CreateSubscription(ctx context.Context, s *Subscription) error
 	GetSubscription(ctx context.Context, partition, id string) (*Subscription, error)
 	ListSubscriptionsByCustomer(ctx context.Context, partition, customerID string) ([]*Subscription, error)
+	// UpdateSubscription writes the whole row, the status among it, within the partition; ErrNotFound
+	// when the partition holds no subscription with that id. It is the provider event's write
+	// (billinghost's webhook applier is its caller): it stores s.EventCreatedAt, keeps the stored
+	// instant when s.EventCreatedAt is nil, and answers ErrStaleEvent, writing nothing, when
+	// s.EventCreatedAt is earlier than the stored instant. StatusChangedAt and EnteredUnpaidAt are the
+	// store's to move (see Subscription).
 	UpdateSubscription(ctx context.Context, s *Subscription) error
 	// UpdateSubscriptionItem writes a subscription's price and quantity within the partition and no
 	// other column; ErrNotFound when the partition holds no subscription with that id. A caller

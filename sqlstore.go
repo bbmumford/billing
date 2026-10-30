@@ -65,7 +65,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			current_period_start INTEGER, current_period_end INTEGER,
 			cancel_at_period_end INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0, canceled_at INTEGER,
-			status_changed_at INTEGER NOT NULL DEFAULT 0, unpaid_since INTEGER
+			status_changed_at INTEGER NOT NULL DEFAULT 0, unpaid_since INTEGER,
+			event_created_at INTEGER
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_subs_customer ON billing_subscriptions(partition, customer_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_subs_unpaid ON billing_subscriptions(unpaid_since)`,
@@ -428,19 +429,21 @@ func (s *SQLStore) SetPriceProviderRef(ctx context.Context, partition, id, provi
 
 const subCols = `id, partition, customer_id, price_id, provider_ref, status, quantity,
 	current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at, canceled_at,
-	status_changed_at, unpaid_since`
+	status_changed_at, unpaid_since, event_created_at`
 
 func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 	var s Subscription
 	var cancel int
 	var created, updated, statusChanged int64
-	var cps, cpe, canceled, unpaidSince sql.NullInt64
+	var cps, cpe, canceled, unpaidSince, eventCreated sql.NullInt64
 	if err := sc.Scan(&s.ID, &s.Partition, &s.CustomerID, &s.PriceID, &s.ProviderRef, &s.Status,
-		&s.Quantity, &cps, &cpe, &cancel, &created, &updated, &canceled, &statusChanged, &unpaidSince); err != nil {
+		&s.Quantity, &cps, &cpe, &cancel, &created, &updated, &canceled, &statusChanged, &unpaidSince,
+		&eventCreated); err != nil {
 		return nil, err
 	}
 	s.StatusChangedAt = fromNanos(statusChanged)
 	s.EnteredUnpaidAt = fromNullNanos(unpaidSince)
+	s.EventCreatedAt = fromNullNanos(eventCreated)
 	s.CancelAtPeriodEnd = cancel != 0
 	s.CurrentPeriodStart = fromNullNanos(cps)
 	s.CurrentPeriodEnd = fromNullNanos(cpe)
@@ -461,11 +464,11 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 	sub.UpdatedAt = now
 	sub.StatusChangedAt, sub.EnteredUnpaidAt = statusClock(nil, sub.Status, now)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sub.ID, sub.Partition, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
 		ptrNanos(sub.CurrentPeriodStart), ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd),
 		tnanos(sub.CreatedAt), tnanos(sub.UpdatedAt), ptrNanos(sub.CanceledAt),
-		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt))
+		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt), ptrNanos(sub.EventCreatedAt))
 	return err
 }
 
@@ -503,27 +506,45 @@ func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, c
 // and the stored unpaid_since carried in the same statement that writes the new
 // status, and an event landing between a caller's read and this write is what the
 // comparison sees. The caller's StatusChangedAt and EnteredUnpaidAt are not read.
+//
+// The event instant is held the same way: event_created_at takes the caller's
+// instant and keeps the stored one on a nil caller instant, and the WHERE admits
+// the row only while the stored instant is null or at or before the caller's, so
+// an older event delivered between the caller's read and this write finds the
+// newer instant and writes nothing. A row the WHERE refused is then read once more
+// to tell the absent row (ErrNotFound) from the refused instant (ErrStaleEvent).
 func (s *SQLStore) UpdateSubscription(ctx context.Context, sub *Subscription) error {
 	now := s.now().UnixNano()
+	eventAt := ptrNanos(sub.EventCreatedAt)
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_subscriptions SET price_id=?, provider_ref=?,
 		status_changed_at = CASE WHEN status = ? THEN status_changed_at ELSE ? END,
 		unpaid_since = CASE
 			WHEN ? NOT IN (`+unpaidStatusSQL+`) THEN NULL
 			WHEN status IN (`+unpaidStatusSQL+`) AND unpaid_since IS NOT NULL THEN unpaid_since
 			ELSE ? END,
+		event_created_at = COALESCE(?, event_created_at),
 		status=?, quantity=?, current_period_start=?, current_period_end=?, cancel_at_period_end=?,
-		updated_at=?, canceled_at=? WHERE id = ? AND (? <> '' AND partition = ?)`,
+		updated_at=?, canceled_at=? WHERE id = ? AND (? <> '' AND partition = ?)
+		AND (? IS NULL OR event_created_at IS NULL OR event_created_at <= ?)`,
 		sub.PriceID, sub.ProviderRef,
 		sub.Status, now,
 		sub.Status, now,
+		eventAt,
 		sub.Status, sub.Quantity, ptrNanos(sub.CurrentPeriodStart),
 		ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd), now,
-		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition)
+		ptrNanos(sub.CanceledAt), sub.ID, sub.Partition, sub.Partition,
+		eventAt, eventAt)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		if eventAt == nil {
+			return ErrNotFound
+		}
+		if _, err := s.GetSubscription(ctx, sub.Partition, sub.ID); err != nil {
+			return err
+		}
+		return ErrStaleEvent
 	}
 	return nil
 }

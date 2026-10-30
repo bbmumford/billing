@@ -285,6 +285,10 @@ func (m *MemStore) ListSubscriptionsByCustomer(_ context.Context, partition, cus
 	return out, nil
 }
 
+// UpdateSubscription is the reference behaviour SQLStore's write is held to: the
+// status instants move by statusClock, and the event instant is the caller's,
+// the stored one on a nil caller instant, and refused with ErrStaleEvent when the
+// caller's is earlier than the stored one, the row left unchanged.
 func (m *MemStore) UpdateSubscription(_ context.Context, s *Subscription) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -292,10 +296,16 @@ func (m *MemStore) UpdateSubscription(_ context.Context, s *Subscription) error 
 	if !ok || !partitionMatch(s.Partition, e.Partition) {
 		return ErrNotFound
 	}
+	if s.EventCreatedAt != nil && e.EventCreatedAt != nil && s.EventCreatedAt.Before(*e.EventCreatedAt) {
+		return ErrStaleEvent
+	}
 	upd := cloneSubscription(s)
 	upd.CreatedAt = e.CreatedAt
 	upd.UpdatedAt = m.now()
 	upd.StatusChangedAt, upd.EnteredUnpaidAt = statusClock(e, s.Status, upd.UpdatedAt)
+	if upd.EventCreatedAt == nil {
+		upd.EventCreatedAt = clonePtr(e.EventCreatedAt)
+	}
 	m.subscriptions[s.ID] = upd
 	return nil
 }
@@ -545,6 +555,7 @@ func cloneSubscription(s *Subscription) *Subscription {
 	cp.CurrentPeriodEnd = clonePtr(s.CurrentPeriodEnd)
 	cp.CanceledAt = clonePtr(s.CanceledAt)
 	cp.EnteredUnpaidAt = clonePtr(s.EnteredUnpaidAt)
+	cp.EventCreatedAt = clonePtr(s.EventCreatedAt)
 	return &cp
 }
 

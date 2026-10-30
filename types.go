@@ -105,6 +105,18 @@ type Subscription struct {
 	// taken from the caller would be whatever that read held, and ListUnpaidSince
 	// selects by this clock.
 	EnteredUnpaidAt *time.Time
+	// EventCreatedAt is the created instant of the provider event last applied to
+	// the row; nil on a row no event has touched. The billing host's webhook
+	// applier sets it from the event it applies, and both stores hold the rule on
+	// the write: UpdateSubscription stores the caller's instant, keeps the stored
+	// one when the caller hands nil (an item or cancel write reads the row back
+	// whole and is no event), and refuses with ErrStaleEvent an instant earlier
+	// than the stored one, writing nothing. The provider does not order its
+	// deliveries, so a row carrying only the status would take a redelivered older
+	// event's status over a newer one's. An equal instant is applied: the
+	// provider's instant has one-second grain and two distinct events may share it.
+	// CreateSubscription stores the value as handed.
+	EventCreatedAt *time.Time
 }
 
 // Invoice is an issued invoice. AmountDueCents/AmountPaidCents are minor units; Status is opaque
