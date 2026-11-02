@@ -59,10 +59,23 @@ type Store interface {
 	UpdateSubscription(ctx context.Context, s *Subscription) error
 	// UpdateSubscriptionItem writes a subscription's price and quantity within the partition and no
 	// other column; ErrNotFound when the partition holds no subscription with that id. A caller
-	// changing the item uses it rather than UpdateSubscription, whose row write carries the status:
-	// a row read before the provider's event and written back after it would put back the status the
-	// event replaced. billinghost's UpdateSubscription is its caller.
+	// changing the row's one item uses it rather than UpdateSubscription, whose row write carries the
+	// status: a row read before the provider's event and written back after it would put back the
+	// status the event replaced. It leaves the item rows alone; UpdateSubscriptionItems writes both.
+	// TODO: no caller in ai, io or library dials it.
 	UpdateSubscriptionItem(ctx context.Context, partition, id, priceID string, quantity int64) error
+	// UpdateSubscriptionItems replaces a subscription's item rows (billing_subscription_items) with
+	// items, in the order given, and writes the first item's price and quantity onto the row, no
+	// other column; ErrNotFound when the partition holds no subscription with that id,
+	// ErrNoSubscriptionItems for an empty list. It is the write Service.UpdateSubscription makes
+	// after the provider has answered, with the items the provider answered, for the reason
+	// UpdateSubscriptionItem exists: the whole-row UpdateSubscription carries the status, and the
+	// status is the provider event's to write.
+	UpdateSubscriptionItems(ctx context.Context, partition, id string, items []SubscriptionItem) error
+	// ListSubscriptionItems answers a subscription's item rows in order, price id and quantity each,
+	// and none for a subscription the partition does not hold. CreateSubscription writes the row's
+	// price and quantity as the first item, so every subscription's items are rows.
+	ListSubscriptionItems(ctx context.Context, partition, id string) ([]SubscriptionItem, error)
 	// UpdateSubscriptionCancel writes a subscription's cancel_at_period_end and canceled_at within the
 	// partition and no other column; ErrNotFound when the partition holds no subscription with that
 	// id. It is the write Service.CancelSubscription makes after the provider has cancelled, with the

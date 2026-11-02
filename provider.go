@@ -69,6 +69,12 @@ type SubscriptionResult struct {
 	Status             string
 	CurrentPeriodStart *time.Time
 	CurrentPeriodEnd   *time.Time
+	// Items is every item the provider's subscription holds after the call,
+	// each with its provider price reference and quantity, in the provider's
+	// order. SubscriptionUpdater fills it, and Service.UpdateSubscription stores
+	// it whole, so the local rows carry what the provider confirmed and not
+	// what the caller asked for.
+	Items []SubscriptionItem
 }
 
 // configError reports an invalid Service configuration.

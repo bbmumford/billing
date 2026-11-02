@@ -70,6 +70,7 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_subs_customer ON billing_subscriptions(partition, customer_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_subs_unpaid ON billing_subscriptions(unpaid_since)`,
+		subscriptionItemCreateSQL,
 		`CREATE TABLE IF NOT EXISTS billing_invoices (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			subscription_id TEXT NOT NULL DEFAULT '', provider_ref TEXT NOT NULL DEFAULT '',
@@ -453,6 +454,11 @@ func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 	return &s, nil
 }
 
+// CreateSubscription inserts the row and, when it names a price, that price and
+// quantity as the subscription's one item row, in the same transaction, so the
+// item table holds every subscription's items from creation and
+// ListSubscriptionItems answers a created subscription's item as it answers an
+// updated one's.
 func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) error {
 	if sub.ID == "" {
 		sub.ID = randomID()
@@ -463,13 +469,25 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 	}
 	sub.UpdatedAt = now
 	sub.StatusChangedAt, sub.EnteredUnpaidAt = statusClock(nil, sub.Status, now)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sub.ID, sub.Partition, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
 		ptrNanos(sub.CurrentPeriodStart), ptrNanos(sub.CurrentPeriodEnd), boolInt(sub.CancelAtPeriodEnd),
 		tnanos(sub.CreatedAt), tnanos(sub.UpdatedAt), ptrNanos(sub.CanceledAt),
-		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt), ptrNanos(sub.EventCreatedAt))
-	return err
+		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt), ptrNanos(sub.EventCreatedAt)); err != nil {
+		return err
+	}
+	if sub.PriceID != "" {
+		if err := insertSubscriptionItems(ctx, tx, sub.ID, []SubscriptionItem{{PriceID: sub.PriceID, Quantity: sub.Quantity}}, now.UnixNano()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLStore) GetSubscription(ctx context.Context, partition, id string) (*Subscription, error) {

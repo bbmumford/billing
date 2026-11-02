@@ -17,11 +17,11 @@ type CancelResult struct {
 	CanceledAt        *time.Time
 }
 
-// ErrNoProviderSubscription is answered by Service.CancelSubscription for a stored
-// subscription carrying no provider reference: there is no provider subscription to
-// cancel, and a cancel that changes nothing at the provider is refused rather than
-// written locally.
-var ErrNoProviderSubscription = errors.New("billing: subscription has no provider subscription to cancel")
+// ErrNoProviderSubscription is answered by Service.CancelSubscription and
+// Service.UpdateSubscription for a stored subscription carrying no provider
+// reference: there is no provider subscription to cancel or update, and a change
+// that reaches nothing at the provider is refused rather than written locally.
+var ErrNoProviderSubscription = errors.New("billing: subscription has no provider subscription to cancel or update")
 
 // CancelSubscription cancels the partition's subscription at the provider, at once or
 // at period end, and then writes the cancel fields the provider answers through

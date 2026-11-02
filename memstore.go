@@ -14,36 +14,38 @@ import (
 // partition-scoped read matches nothing — see partitionMatch, which the durable store's predicates
 // are held to.
 type MemStore struct {
-	mu               sync.Mutex
-	customers        map[string]*Customer
-	products         map[string]*Product
-	prices           map[string]*Price
-	subscriptions    map[string]*Subscription
-	invoices         map[string]*Invoice
-	invoiceItems     []*InvoiceItem
-	payments         map[string]*PaymentLedgerRow // keyed by IdempotencyKey
-	usage            []*UsageRecord
-	credits          []*Credit
-	paymentMethods   map[string]*PaymentMethod // keyed by PaymentMethod.ID
-	discounts        map[string]*Discount      // catalogue, keyed by DiscountID
-	appliedDiscounts []*AppliedDiscount        // idempotency ledger
-	now              func() time.Time
-	newID            func() string
+	mu                sync.Mutex
+	customers         map[string]*Customer
+	products          map[string]*Product
+	prices            map[string]*Price
+	subscriptions     map[string]*Subscription
+	subscriptionItems map[string][]SubscriptionItem // keyed by Subscription.ID; the row's items in order
+	invoices          map[string]*Invoice
+	invoiceItems      []*InvoiceItem
+	payments          map[string]*PaymentLedgerRow // keyed by IdempotencyKey
+	usage             []*UsageRecord
+	credits           []*Credit
+	paymentMethods    map[string]*PaymentMethod // keyed by PaymentMethod.ID
+	discounts         map[string]*Discount      // catalogue, keyed by DiscountID
+	appliedDiscounts  []*AppliedDiscount        // idempotency ledger
+	now               func() time.Time
+	newID             func() string
 }
 
 // NewMemStore builds an empty billing store.
 func NewMemStore() *MemStore {
 	return &MemStore{
-		customers:      map[string]*Customer{},
-		products:       map[string]*Product{},
-		prices:         map[string]*Price{},
-		subscriptions:  map[string]*Subscription{},
-		invoices:       map[string]*Invoice{},
-		payments:       map[string]*PaymentLedgerRow{},
-		paymentMethods: map[string]*PaymentMethod{},
-		discounts:      map[string]*Discount{},
-		now:            time.Now,
-		newID:          randomID,
+		customers:         map[string]*Customer{},
+		products:          map[string]*Product{},
+		prices:            map[string]*Price{},
+		subscriptions:     map[string]*Subscription{},
+		subscriptionItems: map[string][]SubscriptionItem{},
+		invoices:          map[string]*Invoice{},
+		payments:          map[string]*PaymentLedgerRow{},
+		paymentMethods:    map[string]*PaymentMethod{},
+		discounts:         map[string]*Discount{},
+		now:               time.Now,
+		newID:             randomID,
 	}
 }
 
@@ -246,6 +248,9 @@ func (m *MemStore) SetPriceProviderRef(_ context.Context, partition, id, provide
 
 // ── Subscriptions ──
 
+// CreateSubscription is the reference behaviour SQLStore's is held to: the row
+// is stored and, when it names a price, that price and quantity become the
+// subscription's one item.
 func (m *MemStore) CreateSubscription(_ context.Context, s *Subscription) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,6 +264,9 @@ func (m *MemStore) CreateSubscription(_ context.Context, s *Subscription) error 
 	s.UpdatedAt = now
 	s.StatusChangedAt, s.EnteredUnpaidAt = statusClock(nil, s.Status, now)
 	m.subscriptions[s.ID] = cloneSubscription(s)
+	if s.PriceID != "" {
+		m.subscriptionItems[s.ID] = []SubscriptionItem{{PriceID: s.PriceID, Quantity: s.Quantity}}
+	}
 	return nil
 }
 
