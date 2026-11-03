@@ -48,6 +48,14 @@ type Store interface {
 
 	// ── Subscriptions ──
 	CreateSubscription(ctx context.Context, s *Subscription) error
+	// CreateSubscriptionWithItems stores s with the first item's price and quantity on the row and
+	// every item as a row of billing_subscription_items, in the order given, in one write; a list
+	// with no item answers ErrNoSubscriptionItems and one with an item lacking a price, a quantity
+	// below one or a price named twice ErrInvalidSubscriptionItem, and either writes nothing. It is
+	// the write Service.SubscribeItems makes after the provider has created the subscription, with
+	// the items the provider answered, so a subscription created with several items never stands
+	// with only the first.
+	CreateSubscriptionWithItems(ctx context.Context, s *Subscription, items []SubscriptionItem) error
 	GetSubscription(ctx context.Context, partition, id string) (*Subscription, error)
 	ListSubscriptionsByCustomer(ctx context.Context, partition, customerID string) ([]*Subscription, error)
 	// UpdateSubscription writes the whole row, the status among it, within the partition; ErrNotFound

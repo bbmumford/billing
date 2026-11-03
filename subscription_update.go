@@ -33,28 +33,32 @@ type SubscriptionUpdater interface {
 	UpdateSubscription(ctx context.Context, providerRef string, items []SubscriptionItem, prorate bool) (SubscriptionResult, error)
 }
 
-// ErrNoSubscriptionItems is answered by Service.UpdateSubscription and
+// ErrNoSubscriptionItems is answered by Service.SubscribeItems,
+// Service.UpdateSubscription, Store.CreateSubscriptionWithItems and
 // Store.UpdateSubscriptionItems for an empty item list: the list is the
 // subscription's whole item set, and a subscription with no item has no price
 // for its row to carry.
-var ErrNoSubscriptionItems = errors.New("billing: a subscription update names no items")
+var ErrNoSubscriptionItems = errors.New("billing: a subscription create or update names no items")
 
-// ErrInvalidSubscriptionItem is answered by Service.UpdateSubscription before
-// the provider is asked for an item with no price id, a quantity below one, or a
-// price the list names twice: the provider would refuse each, and the item rows
-// are keyed by (subscription, price).
+// ErrInvalidSubscriptionItem is answered by Service.SubscribeItems and
+// Service.UpdateSubscription before the provider is asked, and by
+// Store.CreateSubscriptionWithItems before it writes, for an item with no price
+// id, a quantity below one, or a price the list names twice: the provider would
+// refuse each, and the item rows are keyed by (subscription, price).
 var ErrInvalidSubscriptionItem = errors.New("billing: subscription item needs a price id, a quantity of at least one, and a price named once")
 
-// ErrNoProviderPrice is answered by Service.UpdateSubscription for a catalog
-// price carrying no provider price reference: the provider cannot sell it, and a
-// price that cannot be set at the provider is not written locally.
+// ErrNoProviderPrice is answered by Service.SubscribeItems and
+// Service.UpdateSubscription for a catalog price carrying no provider price
+// reference: the provider cannot sell it, and a price that cannot be set at the
+// provider is not written locally.
 var ErrNoProviderPrice = errors.New("billing: price has no provider price to sell")
 
 // ErrProviderItemsUnresolved is answered by Service.UpdateSubscription when the
 // provider's answer cannot be stored as it stands: it names no items, or an item
 // whose provider price is not the provider reference of any catalog price in the
-// partition. Nothing is written, so the local rows never carry an item the
-// catalog cannot name.
+// partition; and by Service.SubscribeItems for an answer naming a provider price
+// the create did not ask for. Nothing is written, so the local rows never carry
+// an item the catalog cannot name.
 // TODO: the provider has applied the update by then; the subscription's items at
 // the provider and the local rows differ until a caller repeats the update with
 // the catalog holding the price.
@@ -90,23 +94,9 @@ func (s *Service) UpdateSubscription(ctx context.Context, partition, id string, 
 	if !ok {
 		return nil, nil, ErrProviderUnsupported
 	}
-	ask := make([]SubscriptionItem, 0, len(items))
-	byRef := map[string]string{}
-	seen := map[string]bool{}
-	for _, it := range items {
-		if it.PriceID == "" || it.Quantity < 1 || seen[it.PriceID] {
-			return nil, nil, ErrInvalidSubscriptionItem
-		}
-		seen[it.PriceID] = true
-		price, err := s.store.GetPrice(ctx, partition, it.PriceID)
-		if err != nil {
-			return nil, nil, err
-		}
-		if price.ProviderRef == "" {
-			return nil, nil, ErrNoProviderPrice
-		}
-		byRef[price.ProviderRef] = price.ID
-		ask = append(ask, SubscriptionItem{PriceID: price.ID, PriceRef: price.ProviderRef, Quantity: it.Quantity})
+	ask, byRef, err := s.catalogItems(ctx, partition, items)
+	if err != nil {
+		return nil, nil, err
 	}
 	res, err := updater.UpdateSubscription(ctx, sub.ProviderRef, ask, prorate)
 	if err != nil {

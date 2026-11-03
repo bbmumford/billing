@@ -460,6 +460,18 @@ func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 // ListSubscriptionItems answers a created subscription's item as it answers an
 // updated one's.
 func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) error {
+	var items []SubscriptionItem
+	if sub.PriceID != "" {
+		items = []SubscriptionItem{{PriceID: sub.PriceID, Quantity: sub.Quantity}}
+	}
+	return s.insertSubscription(ctx, sub, items)
+}
+
+// insertSubscription inserts the row, its id, instants and status clock
+// assigned here, and items as its item rows, in one transaction.
+// CreateSubscription hands it the row's own price as the one item;
+// CreateSubscriptionWithItems hands it every item the provider answered.
+func (s *SQLStore) insertSubscription(ctx context.Context, sub *Subscription, items []SubscriptionItem) error {
 	if sub.ID == "" {
 		sub.ID = randomID()
 	}
@@ -482,10 +494,8 @@ func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) er
 		tnanos(sub.StatusChangedAt), ptrNanos(sub.EnteredUnpaidAt), ptrNanos(sub.EventCreatedAt)); err != nil {
 		return err
 	}
-	if sub.PriceID != "" {
-		if err := insertSubscriptionItems(ctx, tx, sub.ID, []SubscriptionItem{{PriceID: sub.PriceID, Quantity: sub.Quantity}}, now.UnixNano()); err != nil {
-			return err
-		}
+	if err := insertSubscriptionItems(ctx, tx, sub.ID, items, now.UnixNano()); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
