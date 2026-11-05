@@ -34,12 +34,10 @@ type SubscriptionItemsCreator interface {
 // first item as the row's price and quantity; a provider answering no item list
 // confirms the items it is asked, which are then the rows. A provider refusal,
 // a status outside ValidSubscriptionStatus, or an answer naming a price the
-// request did not ask for writes nothing. It is the create the billing host's
-// CreateSubscription handler is for, because that request names every item.
-// TODO: library billinghost's CreateSubscription calls Subscribe with the
-// request's first item; until it calls this, items after the first reach
-// neither the provider nor a row. An answer refused after the provider created
-// the subscription leaves that provider subscription with no local row.
+// request did not ask for writes nothing. Its caller is the billing host's
+// CreateSubscription handler, with every item its request names.
+// TODO: an answer refused after the provider created the subscription leaves
+// that provider subscription with no local row.
 func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, customerRef string, items []SubscriptionItem, billingProfileID string) (*Subscription, []SubscriptionItem, error) {
 	if len(items) == 0 {
 		return nil, nil, ErrNoSubscriptionItems
