@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"math"
 )
 
 // Discount is a catalogue entry that mirrors a provider coupon / promotion code.
@@ -69,27 +70,34 @@ type DiscountAttachInput struct {
 	IdempotencyKey  string
 }
 
-// ComputeDiscountAmountCents applies a discount's value to a subtotal and returns
-// the cents saved. A percentage value is a percent (5.0 = 5%); a fixed_amount
-// value is cents. Both are clamped to the subtotal so a mis-seeded discount can
-// never exceed the bill. Returns 0 for a nil discount or non-positive subtotal.
-func ComputeDiscountAmountCents(d *Discount, subtotalCents int32) int32 {
-	if d == nil || subtotalCents <= 0 {
+// ComputeDiscountAmountCents answers the minor units a discount takes off a
+// subtotal of subtotalCents, in int64 minor units like every amount here. A
+// percentage value is a percent (5.0 = 5%), read as whole basis points (33.3 =
+// 3330), and the subtotal's share is computed in integers and rounded to the
+// nearest unit, a half up; a fixed_amount value is minor units, rounded the same
+// way. The result is clamped to [0, subtotalCents]: a value that is negative or
+// not a number takes nothing off, and one past the subtotal takes the whole
+// subtotal, so a mis-seeded discount never adds to the bill or exceeds it.
+// Returns 0 for a nil discount, an unknown type or a subtotal below one.
+func ComputeDiscountAmountCents(d *Discount, subtotalCents int64) int64 {
+	if d == nil || subtotalCents <= 0 || !(d.Value > 0) {
 		return 0
 	}
 	switch d.Type {
 	case "percentage":
-		amount := int32((d.Value / 100.0) * float64(subtotalCents))
-		if amount > subtotalCents {
-			amount = subtotalCents
+		if d.Value >= 100 {
+			return subtotalCents
 		}
-		return amount
+		bp := int64(math.Round(d.Value * 100))
+		// subtotal × bp / 10000 split at 10000 so no product passes int64: the
+		// quotient's share is exact and the remainder's is rounded.
+		q, r := subtotalCents/10000, subtotalCents%10000
+		return q*bp + (r*bp+5000)/10000
 	case "fixed_amount":
-		amount := int32(d.Value)
-		if amount > subtotalCents {
-			amount = subtotalCents
+		if d.Value >= float64(subtotalCents) {
+			return subtotalCents
 		}
-		return amount
+		return int64(math.Round(d.Value))
 	default:
 		return 0
 	}
