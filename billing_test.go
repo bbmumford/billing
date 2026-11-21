@@ -89,10 +89,10 @@ func TestPaymentLedger_IdempotentRecordAndStatus(t *testing.T) {
 		if err != nil || dup == nil {
 			t.Fatalf("retry must return the existing row; got dup=%v err=%v", dup, err)
 		}
-		if err := s.UpdatePaymentStatus(ctx, "idem-1", "succeeded", "sealed-charge"); err != nil {
+		if err := s.UpdatePaymentStatus(ctx, "acme", "idem-1", "succeeded", "sealed-charge"); err != nil {
 			t.Fatal(err)
 		}
-		got, _ := s.GetPaymentByKey(ctx, "idem-1")
+		got, _ := s.GetPaymentByKey(ctx, "acme", "idem-1")
 		if got.Status != "succeeded" || got.ChargeRefSealed != "sealed-charge" {
 			t.Fatalf("status: %+v", got)
 		}

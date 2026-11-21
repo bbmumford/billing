@@ -86,14 +86,8 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			metadata TEXT NOT NULL DEFAULT '{}'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_billing_items_invoice ON billing_invoice_items(invoice_id)`,
-		`CREATE TABLE IF NOT EXISTS billing_payments (
-			idempotency_key TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
-			payment_intent_ref TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
-			amount_cents INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '',
-			charge_ref_sealed TEXT NOT NULL DEFAULT '', client_secret_sealed TEXT NOT NULL DEFAULT '',
-			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_billing_payments_customer ON billing_payments(partition, customer_id)`,
+		paymentsTable("billing_payments"),
+		paymentsCustomerIndex,
 		`CREATE TABLE IF NOT EXISTS billing_usage (
 			id TEXT PRIMARY KEY, partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
 			product_id TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0,
@@ -134,7 +128,71 @@ func (s *SQLStore) InitSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.rekeyPayments(ctx)
+}
+
+// paymentsTable is billing_payments' declaration under a table name: the payment ledger, keyed by
+// (partition, idempotency_key) so a key names one row per partition and one partition's key never
+// answers another's charge. InitSchema creates the table under its own name; rekeyPayments creates it
+// under a transient name while it rebuilds a table keyed otherwise.
+func paymentsTable(name string) string {
+	return `CREATE TABLE IF NOT EXISTS ` + name + ` (
+			idempotency_key TEXT NOT NULL DEFAULT '', partition TEXT NOT NULL DEFAULT '', customer_id TEXT NOT NULL DEFAULT '',
+			payment_intent_ref TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
+			amount_cents INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '',
+			charge_ref_sealed TEXT NOT NULL DEFAULT '', client_secret_sealed TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (partition, idempotency_key)
+		)`
+}
+
+const paymentsCustomerIndex = `CREATE INDEX IF NOT EXISTS idx_billing_payments_customer ON billing_payments(partition, customer_id)`
+
+// rekeyPayments rebuilds a billing_payments table whose primary key is idempotency_key alone into
+// paymentsTable's (partition, idempotency_key) key, every row copied, in one transaction; a table
+// already keyed so is left as it is. CREATE TABLE IF NOT EXISTS keeps whatever table a database holds
+// and SQLite changes no primary key in place, so without the rebuild a database holding the
+// single-column key would refuse a second partition's ledger row under a key the first partition
+// used, after the provider had been asked for the intent. InitSchema runs it last, at every boot.
+func (s *SQLStore) rekeyPayments(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT name, pk FROM pragma_table_info('billing_payments')`)
+	if err != nil {
+		return err
+	}
+	pk := map[string]int{}
+	for rows.Next() {
+		var name string
+		var n int
+		if err := rows.Scan(&name, &n); err != nil {
+			rows.Close()
+			return err
+		}
+		pk[name] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if pk["partition"] == 1 && pk["idempotency_key"] == 2 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		paymentsTable("billingPaymentsRekeyed"),
+		`INSERT INTO billingPaymentsRekeyed (` + paymentCols + `) SELECT ` + paymentCols + ` FROM billing_payments`,
+		`DROP TABLE billing_payments`,
+		`ALTER TABLE billingPaymentsRekeyed RENAME TO billing_payments`,
+		paymentsCustomerIndex,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ── codecs ──

@@ -22,7 +22,7 @@ type MemStore struct {
 	subscriptionItems map[string][]SubscriptionItem // keyed by Subscription.ID; the row's items in order
 	invoices          map[string]*Invoice
 	invoiceItems      []*InvoiceItem
-	payments          map[string]*PaymentLedgerRow // keyed by IdempotencyKey
+	payments          map[paymentKey]*PaymentLedgerRow
 	usage             []*UsageRecord
 	credits           []*Credit
 	paymentMethods    map[string]*PaymentMethod // keyed by PaymentMethod.ID
@@ -41,7 +41,7 @@ func NewMemStore() *MemStore {
 		subscriptions:     map[string]*Subscription{},
 		subscriptionItems: map[string][]SubscriptionItem{},
 		invoices:          map[string]*Invoice{},
-		payments:          map[string]*PaymentLedgerRow{},
+		payments:          map[paymentKey]*PaymentLedgerRow{},
 		paymentMethods:    map[string]*PaymentMethod{},
 		discounts:         map[string]*Discount{},
 		now:               time.Now,
@@ -57,7 +57,7 @@ func randomID() string {
 
 // partitionMatch reports whether a row held under partition `have` is visible to a
 // caller asking for partition `want`. Every customer, subscription, product, price,
-// credit, usage and discount lookup in this store filters through it.
+// payment, credit, usage and discount lookup in this store filters through it.
 //
 // An empty `want` names no partition and matches nothing. SQLStore answers the same
 // way — its predicates reject an empty partition parameter before comparing — and the
@@ -394,10 +394,21 @@ func (m *MemStore) UpdateInvoiceStatus(_ context.Context, partition, id, status 
 
 // ── Payment ledger ──
 
+// paymentKey is the ledger's key, the partition and the idempotency key, as SQLStore's primary key
+// on billing_payments is: one key names one row per partition.
+type paymentKey struct{ partition, idempotencyKey string }
+
 func (m *MemStore) RecordPayment(_ context.Context, row *PaymentLedgerRow) (*PaymentLedgerRow, error) {
+	if row.Partition == "" {
+		return nil, ErrNoPartition
+	}
+	if row.IdempotencyKey == "" {
+		return nil, ErrIdempotencyKeyRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if existing, ok := m.payments[row.IdempotencyKey]; ok {
+	k := paymentKey{row.Partition, row.IdempotencyKey}
+	if existing, ok := m.payments[k]; ok {
 		return clonePayment(existing), nil // idempotent: a retry returns the existing row
 	}
 	now := m.now()
@@ -405,25 +416,25 @@ func (m *MemStore) RecordPayment(_ context.Context, row *PaymentLedgerRow) (*Pay
 		row.CreatedAt = now
 	}
 	row.UpdatedAt = now
-	m.payments[row.IdempotencyKey] = clonePayment(row)
+	m.payments[k] = clonePayment(row)
 	return nil, nil
 }
 
-func (m *MemStore) GetPaymentByKey(_ context.Context, idempotencyKey string) (*PaymentLedgerRow, error) {
+func (m *MemStore) GetPaymentByKey(_ context.Context, partition, idempotencyKey string) (*PaymentLedgerRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	row, ok := m.payments[idempotencyKey]
-	if !ok {
+	row, ok := m.payments[paymentKey{partition, idempotencyKey}]
+	if !ok || !partitionMatch(partition, row.Partition) {
 		return nil, ErrNotFound
 	}
 	return clonePayment(row), nil
 }
 
-func (m *MemStore) UpdatePaymentStatus(_ context.Context, idempotencyKey, status, chargeRefSealed string) error {
+func (m *MemStore) UpdatePaymentStatus(_ context.Context, partition, idempotencyKey, status, chargeRefSealed string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	row, ok := m.payments[idempotencyKey]
-	if !ok {
+	row, ok := m.payments[paymentKey{partition, idempotencyKey}]
+	if !ok || !partitionMatch(partition, row.Partition) {
 		return ErrNotFound
 	}
 	row.Status = status

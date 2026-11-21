@@ -95,7 +95,7 @@ func TestService_ChargeSealsSecretIdempotentlyAndReveals(t *testing.T) {
 			t.Fatalf("charge: secret=%q err=%v", secret, err)
 		}
 		// the store holds only the SEALED secret, never the plaintext
-		stored, _ := store.GetPaymentByKey(ctx, "idem-1")
+		stored, _ := store.GetPaymentByKey(ctx, "acme", "idem-1")
 		if stored.ClientSecretSealed == "secret-xyz" || stored.ClientSecretSealed != "enc:secret-xyz" {
 			t.Fatalf("client secret must be sealed at rest; got %q", stored.ClientSecretSealed)
 		}
@@ -113,7 +113,7 @@ func TestService_ChargeSealsSecretIdempotentlyAndReveals(t *testing.T) {
 		if cr, _ := s.RevealChargeRef(stored); cr != "ch_1" {
 			t.Fatalf("RevealChargeRef: got %q want ch_1", cr)
 		}
-		if _, _, err := s.Charge(ctx, ChargeRequest{IdempotencyKey: "idem-2", AmountCents: 0}); !errors.Is(err, ErrAmountInvalid) {
+		if _, _, err := s.Charge(ctx, ChargeRequest{Partition: "acme", IdempotencyKey: "idem-2", AmountCents: 0}); !errors.Is(err, ErrAmountInvalid) {
 			t.Fatal("a non-positive amount must be ErrAmountInvalid")
 		}
 	})

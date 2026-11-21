@@ -151,8 +151,9 @@ type InvoiceItem struct {
 }
 
 // PaymentLedgerRow is one append-only, idempotency-keyed row of the payment ledger — a money movement
-// and its lifecycle status. IdempotencyKey is the unique key a retry reuses so a payment is recorded
-// exactly once. ChargeRefSealed and ClientSecretSealed are the provider charge id and client secret
+// and its lifecycle status. IdempotencyKey is the key a retry reuses so a payment is recorded exactly
+// once; it is unique within the row's Partition, and another partition's row may carry the same key.
+// ChargeRefSealed and ClientSecretSealed are the provider charge id and client secret
 // encrypted at rest (an injected Encryptor); they never reach the store in the clear.
 type PaymentLedgerRow struct {
 	IdempotencyKey     string

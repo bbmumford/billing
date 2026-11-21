@@ -37,9 +37,12 @@ type PaymentProvider interface {
 // PaymentIntentInput/Result carry the neutral fields of a payment-intent creation; all provider ids are
 // opaque strings billing does not interpret.
 type PaymentIntentInput struct {
-	CustomerRef    string
-	AmountCents    int64
-	Currency       string
+	CustomerRef string
+	AmountCents int64
+	Currency    string
+	// IdempotencyKey is the key the provider dedupes the intent by: Charge derives it from the
+	// partition and the caller's key (providerIdempotencyKey), so the provider's one account never
+	// meets two partitions' charges under one key.
 	IdempotencyKey string
 	Metadata       map[string]string
 }
@@ -185,22 +188,29 @@ type ChargeRequest struct {
 // ErrAmountInvalid is returned when a charge amount is not positive.
 var ErrAmountInvalid = errors.New("billing: charge amount must be positive")
 
-// Charge creates a provider payment intent and records it on the ledger exactly once (keyed by
-// IdempotencyKey), sealing the client secret and any charge ref at rest. It returns the ledger row and
-// the PLAINTEXT client secret for the client SDK (returned once; the store holds only the sealed form).
-// A retry with the same IdempotencyKey returns the existing row and its revealed client secret without
-// creating a second provider intent.
+// Charge creates a provider payment intent and records it on the ledger exactly once, keyed by the
+// partition and IdempotencyKey, sealing the client secret and any charge ref at rest. It returns the
+// ledger row and the PLAINTEXT client secret for the client SDK (returned once; the store holds only the
+// sealed form). A retry with the same key in the same partition, asking for the same customer, amount
+// and currency, returns the existing row and its revealed client secret without creating a second
+// provider intent; the same key asking for a different charge is refused with ErrIdempotencyConflict and
+// answers nothing of the stored one. Another partition's row under the same key is never read. A request
+// with no partition answers ErrNoPartition, one with no key ErrIdempotencyKeyRequired, and one with an
+// amount below one ErrAmountInvalid, each before the ledger is read or the provider asked. The billing
+// host's CreatePaymentIntent is its caller, with the sealed partition and the request's key.
 func (s *Service) Charge(ctx context.Context, req ChargeRequest) (row *PaymentLedgerRow, clientSecret string, err error) {
+	if req.Partition == "" {
+		return nil, "", ErrNoPartition
+	}
+	if req.IdempotencyKey == "" {
+		return nil, "", ErrIdempotencyKeyRequired
+	}
 	if req.AmountCents <= 0 {
 		return nil, "", ErrAmountInvalid
 	}
-	// Idempotency: an existing ledger row short-circuits the provider call.
-	if existing, gerr := s.store.GetPaymentByKey(ctx, req.IdempotencyKey); gerr == nil {
-		secret, derr := s.reveal(existing.ClientSecretSealed)
-		if derr != nil {
-			return nil, "", derr
-		}
-		return existing, secret, nil
+	// Idempotency: the partition's ledger row for the key short-circuits the provider call.
+	if existing, gerr := s.store.GetPaymentByKey(ctx, req.Partition, req.IdempotencyKey); gerr == nil {
+		return s.replayCharge(existing, req)
 	} else if !errors.Is(gerr, ErrNotFound) {
 		return nil, "", gerr
 	}
@@ -209,7 +219,7 @@ func (s *Service) Charge(ctx context.Context, req ChargeRequest) (row *PaymentLe
 		CustomerRef:    req.CustomerRef,
 		AmountCents:    req.AmountCents,
 		Currency:       req.Currency,
-		IdempotencyKey: req.IdempotencyKey,
+		IdempotencyKey: providerIdempotencyKey("charge", req.Partition, req.IdempotencyKey),
 		Metadata:       req.Metadata,
 	})
 	if err != nil {
@@ -238,14 +248,25 @@ func (s *Service) Charge(ctx context.Context, req ChargeRequest) (row *PaymentLe
 	if existing, rerr := s.store.RecordPayment(ctx, row); rerr != nil {
 		return nil, "", rerr
 	} else if existing != nil {
-		// A concurrent writer won the race; return their row + revealed secret.
-		secret, derr := s.reveal(existing.ClientSecretSealed)
-		if derr != nil {
-			return nil, "", derr
-		}
-		return existing, secret, nil
+		// A concurrent writer's row under the key landed first; it answers only for the same charge.
+		return s.replayCharge(existing, req)
 	}
 	return row, res.ClientSecret, nil
+}
+
+// replayCharge answers the partition's stored ledger row for a retried key and its revealed client
+// secret when the row records the charge req asks for (sameCharge), and ErrIdempotencyConflict, with no
+// row and no secret, when it does not. Charge calls it for the row its lookup finds and for the row a
+// concurrent writer recorded first.
+func (s *Service) replayCharge(existing *PaymentLedgerRow, req ChargeRequest) (*PaymentLedgerRow, string, error) {
+	if !sameCharge(existing, req) {
+		return nil, "", ErrIdempotencyConflict
+	}
+	secret, err := s.reveal(existing.ClientSecretSealed)
+	if err != nil {
+		return nil, "", err
+	}
+	return existing, secret, nil
 }
 
 // RevealChargeRef decrypts a ledger row's sealed charge ref just-in-time (e.g. to reconcile a refund).

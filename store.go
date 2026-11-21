@@ -98,12 +98,19 @@ type Store interface {
 	ListInvoiceItems(ctx context.Context, invoiceID string) ([]*InvoiceItem, error)
 	UpdateInvoiceStatus(ctx context.Context, partition, id, status string, amountPaidCents int64) error
 
-	// ── Payment ledger (idempotency-keyed, append-only status advance) ──
-	// RecordPayment inserts a ledger row keyed by IdempotencyKey; a duplicate key returns the existing
-	// row without inserting (idempotent), so a retry never double-records a payment.
+	// ── Payment ledger (keyed by partition and idempotency key, append-only status advance) ──
+	// RecordPayment inserts a ledger row keyed by (row.Partition, row.IdempotencyKey); a key the
+	// partition already holds returns the existing row without inserting (idempotent), so a retry never
+	// double-records a payment, and another partition's row under the same key is a different row. A
+	// row with no partition answers ErrNoPartition and one with no key ErrIdempotencyKeyRequired, and
+	// neither is written.
 	RecordPayment(ctx context.Context, row *PaymentLedgerRow) (existing *PaymentLedgerRow, err error)
-	GetPaymentByKey(ctx context.Context, idempotencyKey string) (*PaymentLedgerRow, error)
-	UpdatePaymentStatus(ctx context.Context, idempotencyKey, status, chargeRefSealed string) error
+	// GetPaymentByKey reads the partition's ledger row for a key; ErrNotFound when the partition holds
+	// none, whatever another partition holds under the key.
+	GetPaymentByKey(ctx context.Context, partition, idempotencyKey string) (*PaymentLedgerRow, error)
+	// UpdatePaymentStatus writes the status, and the sealed charge ref when one is given, of the
+	// partition's ledger row for a key; ErrNotFound when the partition holds none.
+	UpdatePaymentStatus(ctx context.Context, partition, idempotencyKey, status, chargeRefSealed string) error
 	ListPaymentsByCustomer(ctx context.Context, partition, customerID string) ([]*PaymentLedgerRow, error)
 
 	// ── Usage ──

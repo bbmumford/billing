@@ -147,20 +147,26 @@ func scanPayment(sc interface{ Scan(...any) error }) (*PaymentLedgerRow, error) 
 }
 
 func (s *SQLStore) RecordPayment(ctx context.Context, row *PaymentLedgerRow) (*PaymentLedgerRow, error) {
+	if row.Partition == "" {
+		return nil, ErrNoPartition
+	}
+	if row.IdempotencyKey == "" {
+		return nil, ErrIdempotencyKeyRequired
+	}
 	now := time.Now()
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = now
 	}
 	row.UpdatedAt = now
-	// Idempotent insert: on a duplicate key, insert nothing and return the existing row so a retry never
-	// double-records a payment. The check + insert run in one transaction (driver-agnostic).
+	// Idempotent insert: on a key the partition already holds, insert nothing and return the existing row
+	// so a retry never double-records a payment. The check + insert run in one transaction (driver-agnostic).
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 	existing, gerr := scanPayment(tx.QueryRowContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
-		WHERE idempotency_key = ?`, row.IdempotencyKey))
+		WHERE partition = ? AND idempotency_key = ?`, row.Partition, row.IdempotencyKey))
 	if gerr == nil {
 		return existing, nil
 	}
@@ -179,9 +185,9 @@ func (s *SQLStore) RecordPayment(ctx context.Context, row *PaymentLedgerRow) (*P
 	return nil, nil
 }
 
-func (s *SQLStore) GetPaymentByKey(ctx context.Context, idempotencyKey string) (*PaymentLedgerRow, error) {
+func (s *SQLStore) GetPaymentByKey(ctx context.Context, partition, idempotencyKey string) (*PaymentLedgerRow, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
-		WHERE idempotency_key = ?`, idempotencyKey)
+		WHERE (? <> '' AND partition = ?) AND idempotency_key = ?`, partition, partition, idempotencyKey)
 	r, err := scanPayment(row)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -189,15 +195,16 @@ func (s *SQLStore) GetPaymentByKey(ctx context.Context, idempotencyKey string) (
 	return r, err
 }
 
-func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, idempotencyKey, status, chargeRefSealed string) error {
+func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, partition, idempotencyKey, status, chargeRefSealed string) error {
 	set := `status = ?, updated_at = ?`
 	args := []any{status, time.Now().UnixNano()}
 	if chargeRefSealed != "" {
 		set += `, charge_ref_sealed = ?`
 		args = append(args, chargeRefSealed)
 	}
-	args = append(args, idempotencyKey)
-	res, err := s.db.ExecContext(ctx, `UPDATE billing_payments SET `+set+` WHERE idempotency_key = ?`, args...)
+	args = append(args, partition, partition, idempotencyKey)
+	res, err := s.db.ExecContext(ctx, `UPDATE billing_payments SET `+set+`
+		WHERE (? <> '' AND partition = ?) AND idempotency_key = ?`, args...)
 	if err != nil {
 		return err
 	}
