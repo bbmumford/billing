@@ -383,6 +383,9 @@ func (m *MemStore) UpdateInvoiceStatus(_ context.Context, partition, id, status 
 	if !ok || !partitionMatch(partition, inv.Partition) {
 		return ErrNotFound
 	}
+	if !invoiceStatusOrder.follows(inv.Status, status) {
+		return ErrStatusOutOfOrder
+	}
 	inv.Status = status
 	inv.AmountPaidCents = amountPaidCents
 	if status == "paid" && inv.PaidAt == nil {
@@ -436,6 +439,9 @@ func (m *MemStore) UpdatePaymentStatus(_ context.Context, partition, idempotency
 	row, ok := m.payments[paymentKey{partition, idempotencyKey}]
 	if !ok || !partitionMatch(partition, row.Partition) {
 		return ErrNotFound
+	}
+	if !paymentStatusOrder.follows(row.Status, status) {
+		return ErrStatusOutOfOrder
 	}
 	row.Status = status
 	if chargeRefSealed != "" {

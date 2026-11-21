@@ -96,6 +96,12 @@ type Store interface {
 	GetInvoice(ctx context.Context, partition, id string) (*Invoice, error)
 	ListInvoicesByCustomer(ctx context.Context, partition, customerID string) ([]*Invoice, error)
 	ListInvoiceItems(ctx context.Context, invoiceID string) ([]*InvoiceItem, error)
+	// UpdateInvoiceStatus writes the partition's invoice's status and amount paid, and its paid
+	// instant once when the status is paid; ErrNotFound when the partition holds no invoice with
+	// that id. A status the stored one does not lead to in the invoice lifecycle
+	// (invoiceStatusOrder) answers ErrStatusOutOfOrder and writes nothing, so a paid or void
+	// invoice keeps its outcome whatever event arrives after it. The billing host's webhook
+	// applier is its caller.
 	UpdateInvoiceStatus(ctx context.Context, partition, id, status string, amountPaidCents int64) error
 
 	// ── Payment ledger (keyed by partition and idempotency key, append-only status advance) ──
@@ -109,7 +115,9 @@ type Store interface {
 	// none, whatever another partition holds under the key.
 	GetPaymentByKey(ctx context.Context, partition, idempotencyKey string) (*PaymentLedgerRow, error)
 	// UpdatePaymentStatus writes the status, and the sealed charge ref when one is given, of the
-	// partition's ledger row for a key; ErrNotFound when the partition holds none.
+	// partition's ledger row for a key; ErrNotFound when the partition holds none. A status the stored
+	// one does not lead to in the payment-intent lifecycle (paymentStatusOrder) answers
+	// ErrStatusOutOfOrder and writes nothing, so a succeeded or canceled payment keeps its outcome.
 	UpdatePaymentStatus(ctx context.Context, partition, idempotencyKey, status, chargeRefSealed string) error
 	ListPaymentsByCustomer(ctx context.Context, partition, customerID string) ([]*PaymentLedgerRow, error)
 

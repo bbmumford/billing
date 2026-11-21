@@ -117,16 +117,34 @@ func (s *SQLStore) UpdateInvoiceStatus(ctx context.Context, partition, id, statu
 		set += `, paid_at = COALESCE(paid_at, ?)`
 		args = append(args, time.Now().UnixNano())
 	}
+	guard, guardArgs := invoiceStatusOrder.guard(status)
 	args = append(args, id, partition, partition)
+	args = append(args, guardArgs...)
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_invoices SET `+set+`
-		WHERE id = ? AND (? <> '' AND partition = ?)`, args...)
+		WHERE id = ? AND (? <> '' AND partition = ?) AND `+guard, args...)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		return s.statusRefusal(ctx, `SELECT 1 FROM billing_invoices WHERE id = ? AND (? <> '' AND partition = ?)`,
+			id, partition, partition)
 	}
 	return nil
+}
+
+// statusRefusal answers why a status write guarded by a statusOrder changed no row, from a query
+// selecting the row the write named: ErrStatusOutOfOrder when the partition holds the row, so the
+// guard refused the status, and ErrNotFound when it does not. UpdateInvoiceStatus and
+// UpdatePaymentStatus call it, so their refusals match MemStore's.
+func (s *SQLStore) statusRefusal(ctx context.Context, query string, args ...any) error {
+	var one int
+	switch err := s.db.QueryRowContext(ctx, query, args...).Scan(&one); {
+	case err == sql.ErrNoRows:
+		return ErrNotFound
+	case err != nil:
+		return err
+	}
+	return ErrStatusOutOfOrder
 }
 
 // ── Payment ledger ──
@@ -202,14 +220,17 @@ func (s *SQLStore) UpdatePaymentStatus(ctx context.Context, partition, idempoten
 		set += `, charge_ref_sealed = ?`
 		args = append(args, chargeRefSealed)
 	}
+	guard, guardArgs := paymentStatusOrder.guard(status)
 	args = append(args, partition, partition, idempotencyKey)
+	args = append(args, guardArgs...)
 	res, err := s.db.ExecContext(ctx, `UPDATE billing_payments SET `+set+`
-		WHERE (? <> '' AND partition = ?) AND idempotency_key = ?`, args...)
+		WHERE (? <> '' AND partition = ?) AND idempotency_key = ? AND `+guard, args...)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		return s.statusRefusal(ctx, `SELECT 1 FROM billing_payments WHERE (? <> '' AND partition = ?) AND idempotency_key = ?`,
+			partition, partition, idempotencyKey)
 	}
 	return nil
 }
