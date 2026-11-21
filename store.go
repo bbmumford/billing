@@ -16,9 +16,9 @@ var ErrNotFound = errors.New("billing: not found")
 var ErrStaleEvent = errors.New("billing: event created earlier than the one applied")
 
 // Store is the persistence contract for the billing money-state. The Partition is opaque and the store
-// filters on it, never interprets it; an empty partition ("") on a partition-scoped read matches NOTHING —
-// the predicates read (? <> '' AND partition = ?), so an unscoped read returns no rows rather than every
-// partition's. These rows are money state: a blank partition that matched everything would read and
+// filters on it, never interprets it; an empty partition on a partition-scoped read matches NOTHING —
+// every predicate rejects an empty parameter before comparing, so an unscoped read returns no rows rather
+// than every partition's. These rows are money state: a blank partition that matched everything would read and
 // mutate another partition's customers, subscriptions and ledger. There is no unscoped read; a caller
 // that must cross partitions names the partition it means. Only sealed material reaches the store for the payment ledger (encrypted
 // charge id / client secret). A consumer supplies a *sql.DB store (the shipped default), a mesh-RPC

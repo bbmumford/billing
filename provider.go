@@ -173,7 +173,7 @@ func (s *Service) EnsureCustomer(ctx context.Context, c *Customer) (*Customer, e
 
 // ChargeRequest describes a charge to create against a customer.
 type ChargeRequest struct {
-	Partition          string
+	Partition      string
 	CustomerID     string
 	CustomerRef    string // opaque provider customer id
 	AmountCents    int64
@@ -225,7 +225,7 @@ func (s *Service) Charge(ctx context.Context, req ChargeRequest) (row *PaymentLe
 	}
 	row = &PaymentLedgerRow{
 		IdempotencyKey:     req.IdempotencyKey,
-		Partition:              req.Partition,
+		Partition:          req.Partition,
 		CustomerID:         req.CustomerID,
 		PaymentIntentRef:   res.IntentRef,
 		Status:             res.Status,
@@ -266,7 +266,7 @@ func (s *Service) Subscribe(ctx context.Context, partition, customerID, customer
 		return nil, ErrInvalidSubscriptionStatus
 	}
 	sub := &Subscription{
-		Partition:              partition,
+		Partition:          partition,
 		CustomerID:         customerID,
 		PriceID:            priceID,
 		ProviderRef:        res.ProviderRef,

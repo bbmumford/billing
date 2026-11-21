@@ -60,7 +60,8 @@ func randomID() string {
 // credit, usage and discount lookup in this store filters through it.
 //
 // An empty `want` names no partition and matches nothing. SQLStore answers the same
-// way — its predicates read (? <> '' AND partition = ?) — and the two have to agree,
+// way — its predicates reject an empty partition parameter before comparing — and the
+// two have to agree,
 // because a test written against this store is what certifies the other's behaviour.
 // Rows here decide what is charged and to whom, so a `want` that matched everything
 // would read and mutate another partition's money.
