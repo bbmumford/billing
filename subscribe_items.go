@@ -34,11 +34,15 @@ type SubscriptionItemsCreator interface {
 // first item as the row's price and quantity; a provider answering no item list
 // confirms the items it is asked, which are then the rows. A provider refusal,
 // a status outside ValidSubscriptionStatus, or an answer naming a price the
-// request did not ask for writes nothing. Its caller is the billing host's
-// CreateSubscription handler, with every item its request names.
+// request did not ask for writes nothing. idempotencyKey is the caller's key for
+// the create, handled as Subscribe handles it: the provider is handed the key
+// derived from it and the partition, and a retry the provider answers with the
+// subscription the first call made is answered the row and items the first call
+// stored. Its caller is the billing host's CreateSubscription handler, with every
+// item its request names.
 // TODO: an answer refused after the provider created the subscription leaves
 // that provider subscription with no local row.
-func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, customerRef string, items []SubscriptionItem, billingProfileID string) (*Subscription, []SubscriptionItem, error) {
+func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, customerRef string, items []SubscriptionItem, billingProfileID, idempotencyKey string) (*Subscription, []SubscriptionItem, error) {
 	if len(items) == 0 {
 		return nil, nil, ErrNoSubscriptionItems
 	}
@@ -46,7 +50,8 @@ func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, cus
 	if err != nil {
 		return nil, nil, err
 	}
-	in := SubscriptionInput{CustomerRef: customerRef, PriceRef: ask[0].PriceRef, Quantity: ask[0].Quantity, BillingProfileID: billingProfileID}
+	in := SubscriptionInput{CustomerRef: customerRef, PriceRef: ask[0].PriceRef, Quantity: ask[0].Quantity,
+		BillingProfileID: billingProfileID, IdempotencyKey: providerIdempotencyKey("subscribe", partition, idempotencyKey)}
 	var res SubscriptionResult
 	if len(ask) == 1 {
 		res, err = s.provider.CreateSubscription(ctx, in)
@@ -62,6 +67,17 @@ func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, cus
 	}
 	if res.Status != "" && !ValidSubscriptionStatus(res.Status) {
 		return nil, nil, ErrInvalidSubscriptionStatus
+	}
+	row, err := s.storedSubscription(ctx, partition, customerID, res.ProviderRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	if row != nil {
+		rowItems, err := s.store.ListSubscriptionItems(ctx, partition, row.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return row, rowItems, nil
 	}
 	stored := storedItems(ask)
 	if len(res.Items) > 0 {

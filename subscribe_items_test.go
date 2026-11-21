@@ -60,7 +60,7 @@ func TestService_SubscribeItemsCreatesEveryItemAtTheProviderAndStoresEachAsARow(
 		svc := newService(t, store, prov)
 
 		row, items, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2",
-			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "bp_1")
+			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "bp_1", "")
 		if err != nil {
 			t.Fatalf("SubscribeItems: %v", err)
 		}
@@ -103,7 +103,7 @@ func TestService_SubscribeItemsWithOneItemUsesTheCoreCreate(t *testing.T) {
 		catalogWithTwoPrices(t, store)
 		prov := &inputRecordingProvider{}
 		svc := newService(t, store, prov)
-		row, items, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2", []SubscriptionItem{{PriceID: "p_plan", Quantity: 2}}, "")
+		row, items, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2", []SubscriptionItem{{PriceID: "p_plan", Quantity: 2}}, "", "")
 		if err != nil {
 			t.Fatalf("SubscribeItems: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestService_SubscribeItemsRefusesManyItemsToAProviderWithoutTheSurface(t *t
 		prov := &fakeProvider{}
 		svc := newService(t, store, prov)
 		_, _, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2",
-			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "")
+			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "", "")
 		if !errors.Is(err, ErrProviderUnsupported) {
 			t.Fatalf("SubscribeItems = %v, want ErrProviderUnsupported", err)
 		}
@@ -169,7 +169,7 @@ func TestService_SubscribeItemsRefusesWhatTheProviderCannotBeAsked(t *testing.T)
 				catalogWithTwoPrices(t, store)
 				prov := &itemsCreatingProvider{answer: SubscriptionResult{ProviderRef: "sub_new", Status: "active"}}
 				svc := newService(t, store, prov)
-				_, _, err := svc.SubscribeItems(ctx, c.partition, "c2", "cus_2", c.items, "")
+				_, _, err := svc.SubscribeItems(ctx, c.partition, "c2", "cus_2", c.items, "", "")
 				if !errors.Is(err, c.want) {
 					t.Fatalf("SubscribeItems = %v, want %v", err, c.want)
 				}
@@ -191,7 +191,7 @@ func TestService_SubscribeItemsWritesNothingWhenTheProviderRefuses(t *testing.T)
 		prov := &itemsCreatingProvider{err: refused}
 		svc := newService(t, store, prov)
 		_, _, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2",
-			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "")
+			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "", "")
 		if !errors.Is(err, refused) {
 			t.Fatalf("SubscribeItems = %v, want the provider's refusal", err)
 		}
@@ -210,7 +210,7 @@ func TestService_SubscribeItemsStoresTheProvidersAnswerNotTheRequest(t *testing.
 		}}
 		svc := newService(t, store, prov)
 		row, _, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2",
-			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "")
+			[]SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}, "", "")
 		if err != nil {
 			t.Fatalf("SubscribeItems: %v", err)
 		}
@@ -240,7 +240,7 @@ func TestService_SubscribeItemsReadsTheProvidersAnswerByTheCatalog(t *testing.T)
 			catalogWithTwoPrices(t, store)
 			prov := &itemsCreatingProvider{answer: SubscriptionResult{ProviderRef: "sub_new", Status: "active",
 				Items: []SubscriptionItem{{PriceRef: "price_plan", Quantity: 1}, {PriceRef: "price_other", Quantity: 3}}}}
-			_, _, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "")
+			_, _, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "", "")
 			if !errors.Is(err, ErrProviderItemsUnresolved) {
 				t.Fatalf("SubscribeItems = %v, want ErrProviderItemsUnresolved", err)
 			}
@@ -251,7 +251,7 @@ func TestService_SubscribeItemsReadsTheProvidersAnswerByTheCatalog(t *testing.T)
 		eachStore(t, func(t *testing.T, store Store) {
 			catalogWithTwoPrices(t, store)
 			prov := &itemsCreatingProvider{answer: SubscriptionResult{ProviderRef: "sub_new", Status: "active"}}
-			row, items, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "")
+			row, items, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "", "")
 			if err != nil {
 				t.Fatalf("SubscribeItems: %v", err)
 			}
@@ -268,7 +268,7 @@ func TestService_SubscribeItemsReadsTheProvidersAnswerByTheCatalog(t *testing.T)
 		eachStore(t, func(t *testing.T, store Store) {
 			catalogWithTwoPrices(t, store)
 			prov := &itemsCreatingProvider{answer: SubscriptionResult{ProviderRef: "sub_new", Status: "suspended"}}
-			_, _, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "")
+			_, _, err := newService(t, store, prov).SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "", "")
 			if !errors.Is(err, ErrInvalidSubscriptionStatus) {
 				t.Fatalf("SubscribeItems = %v, want ErrInvalidSubscriptionStatus", err)
 			}

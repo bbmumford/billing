@@ -65,6 +65,12 @@ type SubscriptionInput struct {
 	// consumer that reads the provider's subscription events can link the
 	// profile from the event alone, which no other field of the event answers.
 	BillingProfileID string
+	// IdempotencyKey is the key the provider dedupes the create by: Subscribe and
+	// SubscribeItems derive it from the partition and the caller's key
+	// (providerIdempotencyKey), so a retried create is answered the subscription
+	// the first one made; "" when the caller gives no key, which asks the
+	// provider for no deduplication.
+	IdempotencyKey string
 }
 
 type SubscriptionResult struct {
@@ -277,14 +283,23 @@ func (s *Service) RevealChargeRef(row *PaymentLedgerRow) (string, error) {
 // Subscribe creates a provider subscription and persists the local Subscription
 // record from the result. billingProfileID is handed to the provider as
 // SubscriptionInput.BillingProfileID and stored nowhere here: the local row
-// carries no profile, the provider's subscription record does.
-func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64, billingProfileID string) (*Subscription, error) {
-	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity, BillingProfileID: billingProfileID})
+// carries no profile, the provider's subscription record does. idempotencyKey is the
+// caller's key for the create: the provider is handed the key derived from it and the
+// partition (SubscriptionInput.IdempotencyKey), so a retry is answered the subscription
+// the first call made, and the row the first call stored for the customer and that
+// subscription is answered instead of a second row (storedSubscription). An empty key asks
+// the provider for no deduplication, so each unkeyed call creates a subscription.
+func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64, billingProfileID, idempotencyKey string) (*Subscription, error) {
+	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity,
+		BillingProfileID: billingProfileID, IdempotencyKey: providerIdempotencyKey("subscribe", partition, idempotencyKey)})
 	if err != nil {
 		return nil, err
 	}
 	if res.Status != "" && !ValidSubscriptionStatus(res.Status) {
 		return nil, ErrInvalidSubscriptionStatus
+	}
+	if stored, err := s.storedSubscription(ctx, partition, customerID, res.ProviderRef); err != nil || stored != nil {
+		return stored, err
 	}
 	sub := &Subscription{
 		Partition:          partition,
@@ -300,6 +315,28 @@ func (s *Service) Subscribe(ctx context.Context, partition, customerID, customer
 		return nil, err
 	}
 	return sub, nil
+}
+
+// storedSubscription answers the partition's row for the customer whose provider reference is
+// providerRef, nil when the partition holds none or providerRef is empty. A keyed create's retry is
+// answered the provider subscription the first call made, and Subscribe and SubscribeItems give that
+// retry the row the first call stored rather than storing a second row for one provider subscription.
+// TODO: two concurrent first calls with one key both find no row and each store one for the
+// provider's one subscription.
+func (s *Service) storedSubscription(ctx context.Context, partition, customerID, providerRef string) (*Subscription, error) {
+	if providerRef == "" {
+		return nil, nil
+	}
+	rows, err := s.store.ListSubscriptionsByCustomer(ctx, partition, customerID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.ProviderRef == providerRef {
+			return r, nil
+		}
+	}
+	return nil, nil
 }
 
 // seal encrypts a value, returning "" for an empty input (nothing to seal).
