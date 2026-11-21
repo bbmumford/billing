@@ -45,6 +45,11 @@ var ErrDiscountInactive = errors.New("billing: discount is inactive")
 // already recorded — callers map it to an idempotent success.
 var ErrDiscountAlreadyApplied = errors.New("billing: discount already applied")
 
+// ErrDiscountExhausted is RecordAppliedDiscount's and ApplyDiscount's refusal
+// of a use past a discount's MaxUses; nothing is recorded and the provider is
+// not asked to attach the coupon.
+var ErrDiscountExhausted = errors.New("billing: discount has reached its use limit")
+
 // DiscountApplier is an OPTIONAL PaymentProvider extension that attaches a
 // provider coupon to a subscription (or, when no subscription is given, to the
 // customer). Service type-asserts on it and fails closed (ErrProviderUnsupported)
@@ -101,10 +106,17 @@ type ApplyDiscountResult struct {
 }
 
 // ApplyDiscount validates the catalogue discount, enforces subscription-scoped
-// idempotency, attaches the provider coupon, and records the application. It is
+// idempotency, takes a use of the discount and records the application
+// (Store.RecordAppliedDiscount), then attaches the provider coupon. It is
 // idempotent: a repeat for an already-applied (subscription, discount) returns
-// AlreadyApplied without a second provider attach. Fails closed when no
-// DiscountApplier is wired.
+// AlreadyApplied without a second provider attach. The use is taken before the
+// attach so a discount at its MaxUses is refused with ErrDiscountExhausted
+// without asking the provider, a customer-wide application counting as a use
+// as a subscription's does; an attach the provider refuses gives the use and
+// the pair back (Store.ReleaseAppliedDiscount), so the next attempt starts
+// from the limit as it was. Fails closed when no DiscountApplier is wired.
+// TODO: a release that fails after a refused attach keeps the use and the
+// pair, so a retry answers AlreadyApplied with no coupon at the provider.
 func (s *Service) ApplyDiscount(ctx context.Context, partition, customerID, subscriptionRef, discountID, idempotencyKey string) (ApplyDiscountResult, error) {
 	d, err := s.store.GetDiscount(ctx, partition, discountID)
 	if err != nil {
@@ -134,21 +146,19 @@ func (s *Service) ApplyDiscount(ctx context.Context, partition, customerID, subs
 	if subscriptionRef == "" && cust.ProviderRef == "" {
 		return ApplyDiscountResult{}, errors.New("billing: customer has no provider account for a customer-wide discount")
 	}
+	if _, err := s.store.RecordAppliedDiscount(ctx, partition, subscriptionRef, discountID); err != nil {
+		if errors.Is(err, ErrDiscountAlreadyApplied) {
+			return ApplyDiscountResult{AlreadyApplied: true}, nil
+		}
+		return ApplyDiscountResult{}, err
+	}
 	if _, err := da.AttachDiscount(ctx, DiscountAttachInput{
 		CustomerRef:     cust.ProviderRef,
 		SubscriptionRef: subscriptionRef,
 		CouponRef:       discountID,
 		IdempotencyKey:  idempotencyKey,
 	}); err != nil {
-		return ApplyDiscountResult{}, err
-	}
-	if subscriptionRef != "" {
-		if _, err := s.store.RecordAppliedDiscount(ctx, partition, subscriptionRef, discountID); err != nil {
-			if errors.Is(err, ErrDiscountAlreadyApplied) {
-				return ApplyDiscountResult{AlreadyApplied: true}, nil
-			}
-			return ApplyDiscountResult{}, err
-		}
+		return ApplyDiscountResult{}, errors.Join(err, s.store.ReleaseAppliedDiscount(ctx, partition, subscriptionRef, discountID))
 	}
 	return ApplyDiscountResult{}, nil
 }

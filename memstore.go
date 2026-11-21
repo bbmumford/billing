@@ -731,24 +731,70 @@ func (m *MemStore) IsDiscountApplied(_ context.Context, partition, subscriptionR
 	return false, nil
 }
 
+// RecordAppliedDiscount is the reference behaviour SQLStore's is held to: under
+// the store's lock, the pair is refused when recorded, the discount when the
+// partition holds none or it has reached MaxUses, and otherwise the use is taken
+// and the pair recorded together.
 func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error) {
-	if subscriptionRef == "" || discountID == "" {
+	if discountID == "" {
 		return nil, ErrNotFound
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, a := range m.appliedDiscounts {
-		if a.SubscriptionRef == subscriptionRef && a.DiscountID == discountID && partitionMatch(partition, a.Partition) {
-			return nil, ErrDiscountAlreadyApplied
-		}
+	if subscriptionRef != "" && m.appliedIndex(partition, subscriptionRef, discountID) >= 0 {
+		return nil, ErrDiscountAlreadyApplied
 	}
-	rec := &AppliedDiscount{ID: m.newID(), Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
-	m.appliedDiscounts = append(m.appliedDiscounts, rec)
-	if d, ok := m.discounts[discountID]; ok {
-		d.CurrentUses++
+	d, ok := m.discounts[discountID]
+	if !ok || !partitionMatch(partition, d.Partition) {
+		return nil, ErrDiscountNotFound
+	}
+	if d.MaxUses > 0 && d.CurrentUses >= d.MaxUses {
+		return nil, ErrDiscountExhausted
+	}
+	d.CurrentUses++
+	rec := &AppliedDiscount{Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
+	if subscriptionRef != "" {
+		rec.ID = m.newID()
+		m.appliedDiscounts = append(m.appliedDiscounts, rec)
 	}
 	cp := *rec
 	return &cp, nil
+}
+
+// ReleaseAppliedDiscount is the reference behaviour SQLStore's is held to: the
+// pair removed and its use given back together, or for a customer-wide use the
+// use alone, never below zero.
+func (m *MemStore) ReleaseAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.discounts[discountID]
+	if !ok || !partitionMatch(partition, d.Partition) {
+		d = nil
+	}
+	if subscriptionRef != "" {
+		i := m.appliedIndex(partition, subscriptionRef, discountID)
+		if i < 0 {
+			return ErrNotFound
+		}
+		m.appliedDiscounts = append(m.appliedDiscounts[:i], m.appliedDiscounts[i+1:]...)
+	} else if d == nil {
+		return ErrDiscountNotFound
+	}
+	if d != nil && d.CurrentUses > 0 {
+		d.CurrentUses--
+	}
+	return nil
+}
+
+// appliedIndex is the position of the partition's (subscriptionRef, discountID)
+// pair in appliedDiscounts, or -1. Callers hold m.mu.
+func (m *MemStore) appliedIndex(partition, subscriptionRef, discountID string) int {
+	for i, a := range m.appliedDiscounts {
+		if a.SubscriptionRef == subscriptionRef && a.DiscountID == discountID && partitionMatch(partition, a.Partition) {
+			return i
+		}
+	}
+	return -1
 }
 
 var _ Store = (*MemStore)(nil)

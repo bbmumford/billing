@@ -804,8 +804,12 @@ func (s *SQLStore) IsDiscountApplied(ctx context.Context, partition, subscriptio
 	return true, nil
 }
 
+// RecordAppliedDiscount takes the use with a conditional increment, the transaction's first
+// statement, so the limit is read and the use counted under the one write lock: a transaction that
+// read first and wrote second could be refused its write by a concurrent use instead of waiting for
+// it. The pair is inserted next and a pair already held rolls the use back.
 func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error) {
-	if subscriptionRef == "" || discountID == "" {
+	if discountID == "" {
 		return nil, ErrNotFound
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -813,27 +817,95 @@ func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscri
 		return nil, err
 	}
 	defer tx.Rollback()
-	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM billing_applied_discounts
-		WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
-		partition, partition, subscriptionRef, discountID).Scan(&existing)
-	if err == nil {
-		return nil, ErrDiscountAlreadyApplied
-	}
-	if err != sql.ErrNoRows {
+	res, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses + 1
+		WHERE discount_id = ? AND (? <> '' AND partition = ?) AND (max_uses <= 0 OR current_uses < max_uses)`,
+		discountID, partition, partition)
+	if err != nil {
 		return nil, err
 	}
-	id := randomID()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_applied_discounts (id, partition, subscription_ref, discount_id, applied_at)
-		VALUES (?,?,?,?,?)`, id, partition, subscriptionRef, discountID, time.Now().UnixNano()); err != nil {
-		return nil, err
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, s.discountUseRefusal(ctx, tx, partition, subscriptionRef, discountID)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses + 1
-		WHERE discount_id = ? AND (? <> '' AND partition = ?)`, discountID, partition, partition); err != nil {
-		return nil, err
+	rec := &AppliedDiscount{Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
+	if subscriptionRef != "" {
+		rec.ID = randomID()
+		ins, err := tx.ExecContext(ctx, `INSERT INTO billing_applied_discounts (id, partition, subscription_ref, discount_id, applied_at)
+			VALUES (?,?,?,?,?) ON CONFLICT (partition, subscription_ref, discount_id) DO NOTHING`,
+			rec.ID, partition, subscriptionRef, discountID, time.Now().UnixNano())
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := ins.RowsAffected(); n == 0 {
+			return nil, ErrDiscountAlreadyApplied
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &AppliedDiscount{ID: id, Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}, nil
+	return rec, nil
+}
+
+// discountUseRefusal answers why RecordAppliedDiscount's increment changed no row, read inside its
+// transaction: ErrDiscountAlreadyApplied when the pair is held (MemStore refuses a held pair first),
+// ErrDiscountNotFound when the partition holds no such discount, else ErrDiscountExhausted.
+func (s *SQLStore) discountUseRefusal(ctx context.Context, tx *sql.Tx, partition, subscriptionRef, discountID string) error {
+	var one int
+	if subscriptionRef != "" {
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM billing_applied_discounts
+			WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ? LIMIT 1`,
+			partition, partition, subscriptionRef, discountID).Scan(&one)
+		if err == nil {
+			return ErrDiscountAlreadyApplied
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+	}
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM billing_discounts WHERE discount_id = ? AND (? <> '' AND partition = ?)`,
+		discountID, partition, partition).Scan(&one)
+	if err == sql.ErrNoRows {
+		return ErrDiscountNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return ErrDiscountExhausted
+}
+
+// ReleaseAppliedDiscount removes the pair first, the transaction's first statement for the reason
+// RecordAppliedDiscount increments first, then gives the use back without going below zero.
+func (s *SQLStore) ReleaseAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if subscriptionRef != "" {
+		res, err := tx.ExecContext(ctx, `DELETE FROM billing_applied_discounts
+			WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ?`,
+			partition, partition, subscriptionRef, discountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses - 1
+		WHERE discount_id = ? AND (? <> '' AND partition = ?) AND current_uses > 0`, discountID, partition, partition)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 && subscriptionRef == "" {
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM billing_discounts WHERE discount_id = ? AND (? <> '' AND partition = ?)`,
+			discountID, partition, partition).Scan(&one)
+		if err == sql.ErrNoRows {
+			return ErrDiscountNotFound
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

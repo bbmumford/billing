@@ -153,7 +153,20 @@ type Store interface {
 	GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error)
 	// IsDiscountApplied reports whether (subscriptionRef, discountID) is already recorded in the partition.
 	IsDiscountApplied(ctx context.Context, partition, subscriptionRef, discountID string) (bool, error)
-	// RecordAppliedDiscount records a (subscriptionRef, discountID) application and bumps the discount's
-	// current_uses in one transaction; ErrDiscountAlreadyApplied when the pair already exists.
+	// RecordAppliedDiscount takes one use of the partition's discount and records the (subscriptionRef,
+	// discountID) application, in one write: ErrDiscountAlreadyApplied when the pair already exists,
+	// ErrDiscountNotFound when the partition holds no such discount, and ErrDiscountExhausted when the
+	// discount's MaxUses is above zero and current_uses has reached it; a refusal takes no use and
+	// records nothing, so concurrent applications never pass the limit. An empty subscriptionRef is a
+	// customer-wide application: it takes a use and records no pair. An empty discountID answers
+	// ErrNotFound. Service.ApplyDiscount calls it before the provider attach, so a discount at its
+	// limit never reaches the provider.
 	RecordAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error)
+	// ReleaseAppliedDiscount gives back the use RecordAppliedDiscount took and removes its pair, in one
+	// write: ErrNotFound when the partition holds no such pair. For an empty subscriptionRef it gives back
+	// one customer-wide use, current_uses never going below zero (ErrDiscountNotFound when the
+	// partition holds no such discount). Service.ApplyDiscount calls it when the provider refuses the
+	// attach, so a failed attach neither spends a use nor leaves a pair that would answer a retry
+	// AlreadyApplied.
+	ReleaseAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) error
 }
