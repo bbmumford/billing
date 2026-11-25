@@ -40,7 +40,9 @@ func TestSubscription_StatusValidationAndUpdate(t *testing.T) {
 	}
 	eachStore(t, func(t *testing.T, s Store) {
 		sub := &Subscription{Partition: "acme", CustomerID: "c1", PriceID: "p1", Status: "active", Quantity: 2}
-		s.CreateSubscription(ctx, sub)
+		if err := s.CreateSubscription(ctx, sub); err != nil {
+			t.Fatalf("s.CreateSubscription: %v", err)
+		}
 		sub.Status = "downgrade_pending"
 		if err := s.UpdateSubscription(ctx, sub); err != nil {
 			t.Fatal(err)
@@ -105,10 +107,14 @@ func TestPaymentLedger_IdempotentRecordAndStatus(t *testing.T) {
 func TestUsage_SummarizeWindow(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		for i, q := range []int64{5, 10, 3} {
-			s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)})
+			if err := s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)}); err != nil {
+				t.Fatalf("s.RecordUsage: %v", err)
+			}
 		}
 		// one record outside the window must not count
-		s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)})
+		if err := s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)}); err != nil {
+			t.Fatalf("s.RecordUsage: %v", err)
+		}
 		sum, _ := s.SummarizeUsage(ctx, "acme", "c1", at, at.Add(10*time.Minute))
 		if len(sum) != 1 || sum[0].TotalQuantity != 18 || sum[0].PeakQuantity != 10 {
 			t.Fatalf("summary: %+v", sum)
@@ -119,11 +125,17 @@ func TestUsage_SummarizeWindow(t *testing.T) {
 func TestCredit_BalanceExcludesExpired(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		now := at
-		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 1000, Currency: "usd"})
+		if err := s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 1000, Currency: "usd"}); err != nil {
+			t.Fatalf("s.GrantCredit: %v", err)
+		}
 		exp := now.Add(-time.Hour)
-		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", ExpiresAt: &exp})
+		if err := s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 500, Currency: "usd", ExpiresAt: &exp}); err != nil {
+			t.Fatalf("s.GrantCredit: %v", err)
+		}
 		future := now.Add(time.Hour)
-		s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 200, Currency: "eur", ExpiresAt: &future})
+		if err := s.GrantCredit(ctx, &Credit{Partition: "acme", CustomerID: "c1", AmountCents: 200, Currency: "eur", ExpiresAt: &future}); err != nil {
+			t.Fatalf("s.GrantCredit: %v", err)
+		}
 		bal, _ := s.CreditBalance(ctx, "acme", "c1", now)
 		if bal["usd"] != 1000 || bal["eur"] != 200 {
 			t.Fatalf("balance must exclude the expired usd credit; got %+v", bal)

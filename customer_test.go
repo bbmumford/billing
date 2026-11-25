@@ -140,7 +140,7 @@ func TestService_EnsureCustomerAnswersTheRowAConcurrentCallerCreated(t *testing.
 	if prov.customers != 1 || got.ProviderRef == "" {
 		t.Fatalf("provider customers = %d, ref %q; want one provider customer on the stored row", prov.customers, got.ProviderRef)
 	}
-	stored, err := store.MemStore.GetCustomerByUser(ctx, "acme", "u1")
+	stored, err := store.GetCustomerByUser(ctx, "acme", "u1")
 	if err != nil || stored.ID != got.ID || stored.ProviderRef != got.ProviderRef {
 		t.Fatalf("stored = %+v %v, want %s/%s", stored, err, got.ID, got.ProviderRef)
 	}

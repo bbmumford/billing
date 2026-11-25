@@ -129,7 +129,11 @@ func TestRecordAppliedDiscount_ConcurrentUsesStayWithinTheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	})
 	sqlStore := NewSQLStore(db)
 	if err := sqlStore.InitSchema(ctx); err != nil {
 		t.Fatal(err)

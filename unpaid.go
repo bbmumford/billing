@@ -94,7 +94,7 @@ func (s *SQLStore) ListUnpaidSince(ctx context.Context, before time.Time) ([]*Su
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Subscription
 	for rows.Next() {
 		sub, err := scanSub(rows)

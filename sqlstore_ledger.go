@@ -37,7 +37,7 @@ func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*Inv
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_invoices (`+invoiceCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		inv.ID, inv.Partition, inv.CustomerID, inv.SubscriptionID, inv.ProviderRef, inv.Number, inv.Status,
@@ -77,7 +77,7 @@ func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, partition, custom
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Invoice
 	for rows.Next() {
 		inv, err := scanInvoice(rows)
@@ -95,7 +95,7 @@ func (s *SQLStore) ListInvoiceItems(ctx context.Context, invoiceID string) ([]*I
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*InvoiceItem
 	for rows.Next() {
 		var it InvoiceItem
@@ -182,7 +182,7 @@ func (s *SQLStore) RecordPayment(ctx context.Context, row *PaymentLedgerRow) (*P
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	existing, gerr := scanPayment(tx.QueryRowContext(ctx, `SELECT `+paymentCols+` FROM billing_payments
 		WHERE partition = ? AND idempotency_key = ?`, row.Partition, row.IdempotencyKey))
 	if gerr == nil {
@@ -241,7 +241,7 @@ func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, partition, custom
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*PaymentLedgerRow
 	for rows.Next() {
 		r, err := scanPayment(rows)
@@ -276,7 +276,7 @@ func (s *SQLStore) SummarizeUsage(ctx context.Context, partition, customerID str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*UsageSummary
 	for rows.Next() {
 		var su UsageSummary
@@ -311,7 +311,7 @@ func (s *SQLStore) ListCredits(ctx context.Context, partition, customerID string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Credit
 	for rows.Next() {
 		var c Credit
@@ -336,7 +336,7 @@ func (s *SQLStore) CreditBalance(ctx context.Context, partition, customerID stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	bal := map[string]int64{}
 	for rows.Next() {
 		var cur string

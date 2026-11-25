@@ -164,12 +164,14 @@ func (s *SQLStore) rekeyPayments(ctx context.Context) error {
 		var name string
 		var n int
 		if err := rows.Scan(&name, &n); err != nil {
-			rows.Close()
+			closeRows(rows)
 			return err
 		}
 		pk[name] = n
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -180,7 +182,7 @@ func (s *SQLStore) rekeyPayments(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	for _, q := range []string{
 		paymentsTable("billingPaymentsRekeyed"),
 		`INSERT INTO billingPaymentsRekeyed (` + paymentCols + `) SELECT ` + paymentCols + ` FROM billing_payments`,
@@ -403,7 +405,7 @@ func (s *SQLStore) ListProducts(ctx context.Context, partition string, activeOnl
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Product
 	for rows.Next() {
 		p, err := scanProduct(rows)
@@ -460,7 +462,7 @@ func (s *SQLStore) ListPrices(ctx context.Context, partition, productID string) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Price
 	for rows.Next() {
 		p, err := scanPrice(rows)
@@ -543,7 +545,7 @@ func (s *SQLStore) insertSubscription(ctx context.Context, sub *Subscription, it
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_subscriptions (`+subCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sub.ID, sub.Partition, sub.CustomerID, sub.PriceID, sub.ProviderRef, sub.Status, sub.Quantity,
@@ -574,7 +576,7 @@ func (s *SQLStore) ListSubscriptionsByCustomer(ctx context.Context, partition, c
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*Subscription
 	for rows.Next() {
 		sub, err := scanSub(rows)
@@ -670,7 +672,7 @@ func (s *SQLStore) AddPaymentMethod(ctx context.Context, pm *PaymentMethod) erro
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	// One default per customer: clear the others before this method claims it.
 	if pm.IsDefault {
 		if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
@@ -696,7 +698,7 @@ func (s *SQLStore) ListPaymentMethods(ctx context.Context, partition, customerID
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []*PaymentMethod
 	for rows.Next() {
 		pm, err := scanPM(rows)
@@ -723,7 +725,7 @@ func (s *SQLStore) SetDefaultPaymentMethod(ctx context.Context, partition, custo
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	now := time.Now().UnixNano()
 	if _, err := tx.ExecContext(ctx, `UPDATE billing_payment_methods SET is_default=0, updated_at=?
 		WHERE (? <> '' AND partition = ?) AND customer_id = ? AND active = 1`,
@@ -816,7 +818,7 @@ func (s *SQLStore) RecordAppliedDiscount(ctx context.Context, partition, subscri
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	res, err := tx.ExecContext(ctx, `UPDATE billing_discounts SET current_uses = current_uses + 1
 		WHERE discount_id = ? AND (? <> '' AND partition = ?) AND (max_uses <= 0 OR current_uses < max_uses)`,
 		discountID, partition, partition)
@@ -879,7 +881,7 @@ func (s *SQLStore) ReleaseAppliedDiscount(ctx context.Context, partition, subscr
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	if subscriptionRef != "" {
 		res, err := tx.ExecContext(ctx, `DELETE FROM billing_applied_discounts
 			WHERE (? <> '' AND partition = ?) AND subscription_ref = ? AND discount_id = ?`,
@@ -909,3 +911,14 @@ func (s *SQLStore) ReleaseAppliedDiscount(ctx context.Context, partition, subscr
 	}
 	return tx.Commit()
 }
+
+// rollbackUnlessCommitted is the deferred Rollback of every transaction in this
+// package. After Commit it returns sql.ErrTxDone, and an early return already
+// carries the error that stopped the transaction; its result is dropped.
+func rollbackUnlessCommitted(tx *sql.Tx) { _ = tx.Rollback() }
+
+// closeRows is the deferred Close of every query's rows in this package.
+// database/sql closes rows itself once Next reports the end, so a normal return
+// leaves nothing to close, and an early return already carries the error that
+// stopped the read; its result is dropped.
+func closeRows(rows *sql.Rows) { _ = rows.Close() }

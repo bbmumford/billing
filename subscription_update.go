@@ -189,7 +189,7 @@ func (s *SQLStore) UpdateSubscriptionItems(ctx context.Context, partition, id st
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackUnlessCommitted(tx)
 	now := s.now().UnixNano()
 	res, err := tx.ExecContext(ctx, `UPDATE billing_subscriptions SET price_id=?, quantity=?, updated_at=?
 		WHERE id = ? AND (? <> '' AND partition = ?)`,
@@ -241,7 +241,7 @@ func (s *SQLStore) ListSubscriptionItems(ctx context.Context, partition, id stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeRows(rows)
 	var out []SubscriptionItem
 	for rows.Next() {
 		var it SubscriptionItem
