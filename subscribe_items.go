@@ -162,6 +162,9 @@ func checkCreateItems(items []SubscriptionItem) error {
 // checked first (checkCreateItems). Service.SubscribeItems is its caller, with
 // the items the provider answered.
 func (s *SQLStore) CreateSubscriptionWithItems(ctx context.Context, sub *Subscription, items []SubscriptionItem) error {
+	if sub.Partition == "" {
+		return ErrNoPartition
+	}
 	if err := checkCreateItems(items); err != nil {
 		return err
 	}
@@ -174,6 +177,9 @@ func (s *SQLStore) CreateSubscriptionWithItems(ctx context.Context, sub *Subscri
 // and quantity and its status instants from the store's clock, and the items in
 // the order given.
 func (m *MemStore) CreateSubscriptionWithItems(_ context.Context, s *Subscription, items []SubscriptionItem) error {
+	if s.Partition == "" {
+		return ErrNoPartition
+	}
 	if err := checkCreateItems(items); err != nil {
 		return err
 	}

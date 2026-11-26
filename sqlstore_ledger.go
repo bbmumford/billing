@@ -27,6 +27,9 @@ func scanInvoice(sc interface{ Scan(...any) error }) (*Invoice, error) {
 }
 
 func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*InvoiceItem) error {
+	if inv.Partition == "" {
+		return ErrNoPartition
+	}
 	if inv.ID == "" {
 		inv.ID = randomID()
 	}
@@ -256,6 +259,9 @@ func (s *SQLStore) ListPaymentsByCustomer(ctx context.Context, partition, custom
 // ── Usage ──
 
 func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
+	if u.Partition == "" {
+		return ErrNoPartition
+	}
 	if u.ID == "" {
 		u.ID = randomID()
 	}
@@ -291,6 +297,9 @@ func (s *SQLStore) SummarizeUsage(ctx context.Context, partition, customerID str
 // ── Credits ──
 
 func (s *SQLStore) GrantCredit(ctx context.Context, c *Credit) error {
+	if c.Partition == "" {
+		return ErrNoPartition
+	}
 	if c.ID == "" {
 		c.ID = randomID()
 	}

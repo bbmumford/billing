@@ -266,6 +266,9 @@ func scanCustomer2(sc interface{ Scan(...any) error }) (*Customer, error) {
 // stored. Service.EnsureCustomer is its caller and reads ErrCustomerExists as the
 // concurrent caller's row to answer.
 func (s *SQLStore) CreateCustomer(ctx context.Context, c *Customer) error {
+	if c.Partition == "" {
+		return ErrNoPartition
+	}
 	id := c.ID
 	if id == "" {
 		id = randomID()
@@ -353,6 +356,9 @@ func (s *SQLStore) UpdateCustomer(ctx context.Context, c *Customer) error {
 // ── Products & prices ──
 
 func (s *SQLStore) CreateProduct(ctx context.Context, p *Product) error {
+	if p.Partition == "" {
+		return ErrNoPartition
+	}
 	if p.ID == "" {
 		p.ID = randomID()
 	}
@@ -433,6 +439,9 @@ func scanPrice(sc interface{ Scan(...any) error }) (*Price, error) {
 }
 
 func (s *SQLStore) CreatePrice(ctx context.Context, p *Price) error {
+	if p.Partition == "" {
+		return ErrNoPartition
+	}
 	if p.ID == "" {
 		p.ID = randomID()
 	}
@@ -520,6 +529,9 @@ func scanSub(sc interface{ Scan(...any) error }) (*Subscription, error) {
 // ListSubscriptionItems answers a created subscription's item as it answers an
 // updated one's.
 func (s *SQLStore) CreateSubscription(ctx context.Context, sub *Subscription) error {
+	if sub.Partition == "" {
+		return ErrNoPartition
+	}
 	var items []SubscriptionItem
 	if sub.PriceID != "" {
 		items = []SubscriptionItem{{PriceID: sub.PriceID, Quantity: sub.Quantity}}
@@ -659,6 +671,9 @@ func scanPM(sc interface{ Scan(...any) error }) (*PaymentMethod, error) {
 }
 
 func (s *SQLStore) AddPaymentMethod(ctx context.Context, pm *PaymentMethod) error {
+	if pm.Partition == "" {
+		return ErrNoPartition
+	}
 	if pm.ID == "" {
 		pm.ID = randomID()
 	}
@@ -759,6 +774,9 @@ func (s *SQLStore) RemovePaymentMethod(ctx context.Context, partition, id string
 // ── discounts ──
 
 func (s *SQLStore) UpsertDiscount(ctx context.Context, d *Discount) error {
+	if d.Partition == "" {
+		return ErrNoPartition
+	}
 	if d.DiscountID == "" {
 		d.DiscountID = randomID()
 	}

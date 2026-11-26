@@ -74,6 +74,9 @@ func partitionMatch(want, have string) bool { return want != "" && want == have 
 // answers ErrCustomerExists and changes nothing, and the id and instants are
 // assigned to c only for a row that is stored.
 func (m *MemStore) CreateCustomer(_ context.Context, c *Customer) error {
+	if c.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.customers {
@@ -157,6 +160,9 @@ func (m *MemStore) UpdateCustomer(_ context.Context, c *Customer) error {
 // ── Products & prices ──
 
 func (m *MemStore) CreateProduct(_ context.Context, p *Product) error {
+	if p.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p.ID == "" {
@@ -198,6 +204,9 @@ func (m *MemStore) ListProducts(_ context.Context, partition string, activeOnly 
 }
 
 func (m *MemStore) CreatePrice(_ context.Context, p *Price) error {
+	if p.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p.ID == "" {
@@ -253,6 +262,9 @@ func (m *MemStore) SetPriceProviderRef(_ context.Context, partition, id, provide
 // is stored and, when it names a price, that price and quantity become the
 // subscription's one item.
 func (m *MemStore) CreateSubscription(_ context.Context, s *Subscription) error {
+	if s.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.ID == "" {
@@ -322,6 +334,9 @@ func (m *MemStore) UpdateSubscription(_ context.Context, s *Subscription) error 
 // ── Invoices ──
 
 func (m *MemStore) CreateInvoice(_ context.Context, inv *Invoice, items []*InvoiceItem) error {
+	if inv.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if inv.ID == "" {
@@ -467,6 +482,9 @@ func (m *MemStore) ListPaymentsByCustomer(_ context.Context, partition, customer
 // ── Usage ──
 
 func (m *MemStore) RecordUsage(_ context.Context, u *UsageRecord) error {
+	if u.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if u.ID == "" {
@@ -511,6 +529,9 @@ func (m *MemStore) SummarizeUsage(_ context.Context, partition, customerID strin
 // ── Credits ──
 
 func (m *MemStore) GrantCredit(_ context.Context, c *Credit) error {
+	if c.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c.ID == "" {
@@ -617,6 +638,9 @@ func clonePaymentMethod(pm *PaymentMethod) *PaymentMethod { cp := *pm; return &c
 // ── payment methods ──
 
 func (m *MemStore) AddPaymentMethod(_ context.Context, pm *PaymentMethod) error {
+	if pm.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if pm.ID == "" {
@@ -696,6 +720,9 @@ func (m *MemStore) RemovePaymentMethod(_ context.Context, partition, id string) 
 // ── discounts ──
 
 func (m *MemStore) UpsertDiscount(_ context.Context, d *Discount) error {
+	if d.Partition == "" {
+		return ErrNoPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if d.DiscountID == "" {

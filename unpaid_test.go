@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -271,11 +272,11 @@ func TestListUnpaidSince_AnswersEveryPartitionAtOrBeforeTheInstant(t *testing.T)
 		create("umbrella", "active", 0)
 		create("hooli", "canceled", 0)
 
-		// A row stored under the empty partition belongs to no partition.
+		// A row with no partition is refused, so none is stored to be listed.
 		clk.set(clk.day(0))
 		blank := &Subscription{CustomerID: "c-blank", PriceID: "p1", Status: "past_due"}
-		if err := s.CreateSubscription(ctx, blank); err != nil {
-			t.Fatalf("CreateSubscription: %v", err)
+		if err := s.CreateSubscription(ctx, blank); !errors.Is(err, ErrNoPartition) {
+			t.Fatalf("CreateSubscription with no partition = %v, want ErrNoPartition", err)
 		}
 
 		cases := []struct {
