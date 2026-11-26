@@ -5,7 +5,7 @@ import "errors"
 // ErrInvalidSubscriptionStatus is returned when a subscription status outside the allowed set is used.
 var ErrInvalidSubscriptionStatus = errors.New("billing: invalid subscription status")
 
-// validSubscriptionStatuses is the allowed lifecycle set (from the source domain). Kept as data, not an
+// validSubscriptionStatuses is the allowed lifecycle set. Kept as data, not an
 // enum type, so the Subscription.Status field stays an opaque string the store never interprets while
 // the service still rejects an unknown status. unpaid and incomplete_expired are statuses the payment
 // provider reports and the billing host's webhook applier stores as reported; unpaid is one of the two

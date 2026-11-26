@@ -26,8 +26,10 @@ var ErrStaleEvent = errors.New("billing: event created earlier than the one appl
 // every predicate rejects an empty parameter before comparing, so an unscoped read returns no rows rather
 // than every partition's. These rows are money state: a blank partition that matched everything would read and
 // mutate another partition's customers, subscriptions and ledger. Every write of a row with no partition
-// answers ErrNoPartition and stores nothing, so no row is kept that no read can reach. There is no unscoped read; a caller
-// that must cross partitions names the partition it means. Only sealed material reaches the store for the payment ledger (encrypted
+// answers ErrNoPartition and stores nothing, so no row is kept that no read can reach. The one read that names no
+// partition is GetCustomerByProviderRef, which a provider event's applier uses to find the partition
+// the event's customer belongs to before any partition is known; every other read is scoped, and a
+// caller that must cross partitions names the partition it means. Only sealed material reaches the store for the payment ledger (encrypted
 // charge id / client secret). A consumer supplies a *sql.DB store (the shipped default), a mesh-RPC
 // gateway, or the reference MemStore. The payment PROVIDER (Stripe/etc.) is a separate injected seam,
 // not part of this contract.

@@ -314,6 +314,8 @@ func (s *Service) Subscribe(ctx context.Context, partition, customerID, customer
 	if err != nil {
 		return nil, err
 	}
+	// TODO: a status outside the allowed set is refused after the provider created the subscription,
+	// so the provider holds a subscription this store has no row for.
 	if res.Status != "" && !ValidSubscriptionStatus(res.Status) {
 		return nil, ErrInvalidSubscriptionStatus
 	}

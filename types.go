@@ -1,7 +1,6 @@
-// Package billing is the scope-agnostic billing system (extracted from the HSTLES billing domain). It
-// owns the neutral money-state — customers, a product/price catalog, subscriptions, invoices, an
+// Package billing is the scope-agnostic billing system. It owns the neutral money-state — customers, a product/price catalog, subscriptions, invoices, an
 // idempotency-keyed payment ledger, metered usage, and credit grants — over an injected store. The
-// primary axis (a baked per-tenant billing DB) becomes an opaque Partition the system never interprets; the
+// primary axis is an opaque Partition the system never interprets; the
 // customer/user/org ids are opaque; and every payment-PROVIDER identifier (a Stripe customer/price/
 // intent id) is a single opaque ProviderRef, because the provider itself is a pluggable seam a consumer
 // injects — the package holds neutral state and pulls no payment-SDK dependency. Money is always int64

@@ -125,9 +125,12 @@ func ComputeDiscountAmountCents(d *Discount, subtotalCents int64) int64 {
 func customerWideRef(customerID string) string { return "customer:" + customerID }
 
 // ApplyDiscountResult reports the outcome of an apply. AlreadyApplied is true when
-// the (subscription, discount) pair was already recorded. The amount fields are
-// populated only when a subtotal is supplied to a future amount-aware caller;
-// today's caller reads success/idempotency alone, so they default to zero.
+// the application was already recorded. ApplyDiscount leaves both amount fields
+// zero: the provider takes the discount off the invoice it raises, and no input
+// carries the subtotal ComputeDiscountAmountCents would need. The billing host
+// copies them onto its answer.
+// TODO: fill the amounts from ComputeDiscountAmountCents once an input carries
+// the subtotal, or drop them with the contract's fields.
 type ApplyDiscountResult struct {
 	AlreadyApplied     bool
 	AppliedAmountCents int32
