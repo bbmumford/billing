@@ -171,6 +171,9 @@ func (m *MemStore) CreateProduct(_ context.Context, p *Product) error {
 	if p.ID == "" {
 		p.ID = m.newID()
 	}
+	if _, ok := m.products[p.ID]; ok {
+		return ErrDuplicateID
+	}
 	now := m.now()
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = now
@@ -217,6 +220,9 @@ func (m *MemStore) CreatePrice(_ context.Context, p *Price) error {
 	defer m.mu.Unlock()
 	if p.ID == "" {
 		p.ID = m.newID()
+	}
+	if _, ok := m.prices[p.ID]; ok {
+		return ErrDuplicateID
 	}
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = m.now()
@@ -350,6 +356,9 @@ func (m *MemStore) CreateInvoice(_ context.Context, inv *Invoice, items []*Invoi
 	defer m.mu.Unlock()
 	if inv.ID == "" {
 		inv.ID = m.newID()
+	}
+	if _, ok := m.invoices[inv.ID]; ok {
+		return ErrDuplicateID
 	}
 	if inv.CreatedAt.IsZero() {
 		inv.CreatedAt = m.now()
@@ -514,6 +523,11 @@ func (m *MemStore) RecordUsage(_ context.Context, u *UsageRecord) error {
 	if u.ID == "" {
 		return ErrIdempotencyKeyRequired
 	}
+	for _, have := range m.usage {
+		if have.ID == u.ID {
+			return ErrDuplicateID
+		}
+	}
 	if u.RecordedAt.IsZero() {
 		u.RecordedAt = m.now()
 	}
@@ -560,6 +574,11 @@ func (m *MemStore) GrantCredit(_ context.Context, c *Credit) error {
 	defer m.mu.Unlock()
 	if c.ID == "" {
 		c.ID = m.newID()
+	}
+	for _, have := range m.credits {
+		if have.ID == c.ID {
+			return ErrDuplicateID
+		}
 	}
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = m.now()

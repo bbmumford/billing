@@ -41,11 +41,11 @@ func (s *SQLStore) CreateInvoice(ctx context.Context, inv *Invoice, items []*Inv
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_invoices (`+invoiceCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	if err := insertedOne(tx.ExecContext(ctx, `INSERT INTO billing_invoices (`+invoiceCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		inv.ID, inv.Partition, inv.CustomerID, inv.SubscriptionID, inv.ProviderRef, inv.Number, inv.Status,
 		inv.Currency, inv.AmountDueCents, inv.AmountPaidCents, tnanos(inv.CreatedAt), ptrNanos(inv.DueAt),
-		ptrNanos(inv.PaidAt)); err != nil {
+		ptrNanos(inv.PaidAt))); err != nil {
 		return err
 	}
 	for _, it := range items {
@@ -274,10 +274,10 @@ func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
 		u.RecordedAt = time.Now()
 	}
 	if u.IdempotencyKey == "" {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
-			(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
-			u.ID, u.Partition, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
-		return err
+		return insertedOne(s.db.ExecContext(ctx, `INSERT INTO billing_usage
+			(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)
+			ON CONFLICT(id) DO NOTHING`,
+			u.ID, u.Partition, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt)))
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
 		(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)
@@ -337,11 +337,10 @@ func (s *SQLStore) GrantCredit(ctx context.Context, c *Credit) error {
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_credits
+	return insertedOne(s.db.ExecContext(ctx, `INSERT INTO billing_credits
 		(id, partition, customer_id, amount_cents, currency, reason, created_at, expires_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		c.ID, c.Partition, c.CustomerID, c.AmountCents, c.Currency, c.Reason, tnanos(c.CreatedAt), ptrNanos(c.ExpiresAt))
-	return err
+		VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+		c.ID, c.Partition, c.CustomerID, c.AmountCents, c.Currency, c.Reason, tnanos(c.CreatedAt), ptrNanos(c.ExpiresAt)))
 }
 
 func (s *SQLStore) ListCredits(ctx context.Context, partition, customerID string) ([]*Credit, error) {

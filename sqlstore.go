@@ -370,11 +370,28 @@ func (s *SQLStore) CreateProduct(ctx context.Context, p *Product) error {
 		p.CreatedAt = now
 	}
 	p.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_products (`+productCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_products (`+productCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		p.ID, p.Partition, p.ServiceID, p.Name, p.Description, boolInt(p.Active), jsonMap(p.Metadata),
 		tnanos(p.CreatedAt), tnanos(p.UpdatedAt))
-	return err
+	return insertedOne(res, err)
+}
+
+// insertedOne answers an INSERT ... ON CONFLICT(id) DO NOTHING's outcome: the statement's error,
+// else ErrDuplicateID when it inserted no row, so SQLStore refuses a held id with the error MemStore
+// answers.
+func insertedOne(res sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDuplicateID
+	}
+	return nil
 }
 
 func scanProduct(sc interface{ Scan(...any) error }) (*Product, error) {
@@ -454,11 +471,11 @@ func (s *SQLStore) CreatePrice(ctx context.Context, p *Price) error {
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_prices (`+priceCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_prices (`+priceCols+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
 		p.ID, p.Partition, p.ProductID, p.ProviderRef, p.Currency, p.AmountCents, p.Interval,
 		p.PricingModel, p.TierConfig, p.PercentageRate, jsonMap(p.Metadata), tnanos(p.CreatedAt))
-	return err
+	return insertedOne(res, err)
 }
 
 func (s *SQLStore) GetPrice(ctx context.Context, partition, id string) (*Price, error) {

@@ -9,6 +9,12 @@ import (
 // ErrNotFound is returned by single-record reads when nothing matches.
 var ErrNotFound = errors.New("billing: not found")
 
+// ErrDuplicateID is both stores' refusal of a product, price, invoice, usage record or credit
+// whose id the store already holds; nothing is written. SQLStore's primary keys refuse the row and
+// MemStore refuses it the same way, so a test against one store certifies the other's answer, and a
+// caller re-reads the stored row rather than overwriting it or counting it twice.
+var ErrDuplicateID = errors.New("billing: a row with that id is already stored")
+
 // ErrStaleEvent is UpdateSubscription's refusal of a write whose
 // Subscription.EventCreatedAt is earlier than the instant the stored row carries;
 // nothing is written. billinghost's webhook applier acknowledges the event on it,
