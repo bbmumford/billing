@@ -280,6 +280,10 @@ func (s *Service) RevealChargeRef(row *PaymentLedgerRow) (string, error) {
 	return s.reveal(row.ChargeRefSealed)
 }
 
+// ErrPriceRefMismatch is Subscribe's refusal of a provider price reference
+// that is not the catalog price's; the provider is not asked.
+var ErrPriceRefMismatch = errors.New("billing: the provider price is not the catalog price's")
+
 // Subscribe creates a provider subscription and persists the local Subscription
 // record from the result. billingProfileID is handed to the provider as
 // SubscriptionInput.BillingProfileID and stored nowhere here: the local row
@@ -288,9 +292,24 @@ func (s *Service) RevealChargeRef(row *PaymentLedgerRow) (string, error) {
 // partition (SubscriptionInput.IdempotencyKey), so a retry is answered the subscription
 // the first call made, and the row the first call stored for the customer and that
 // subscription is answered instead of a second row (storedSubscription). An empty key asks
-// the provider for no deduplication, so each unkeyed call creates a subscription.
+// the provider for no deduplication, so each unkeyed call creates a subscription. The price is
+// read from the catalog (CatalogPartition) before the provider is asked, as SubscribeItems reads
+// each of its items': a priceID the catalog does not hold answers the store's ErrNotFound, a
+// catalog price with no provider price ErrNoProviderPrice, and a priceRef other than the catalog
+// price's ErrPriceRefMismatch, so the provider is never asked for a price the catalog does not
+// sell. An empty priceRef asks for the catalog price's own.
 func (s *Service) Subscribe(ctx context.Context, partition, customerID, customerRef, priceID, priceRef string, quantity int64, billingProfileID, idempotencyKey string) (*Subscription, error) {
-	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: priceRef, Quantity: quantity,
+	price, err := s.store.GetPrice(ctx, CatalogPartition, priceID)
+	if err != nil {
+		return nil, err
+	}
+	if price.ProviderRef == "" {
+		return nil, ErrNoProviderPrice
+	}
+	if priceRef != "" && priceRef != price.ProviderRef {
+		return nil, ErrPriceRefMismatch
+	}
+	res, err := s.provider.CreateSubscription(ctx, SubscriptionInput{CustomerRef: customerRef, PriceRef: price.ProviderRef, Quantity: quantity,
 		BillingProfileID: billingProfileID, IdempotencyKey: providerIdempotencyKey("subscribe", partition, idempotencyKey)})
 	if err != nil {
 		return nil, err

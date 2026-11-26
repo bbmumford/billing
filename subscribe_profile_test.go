@@ -25,7 +25,9 @@ func TestSubscribe_HandsTheBillingProfileToTheProvider(t *testing.T) {
 	for _, profile := range []string{"bp_1", ""} {
 		t.Run("profile "+profile, func(t *testing.T) {
 			p := &inputRecordingProvider{}
-			s := newService(t, NewMemStore(), p)
+			store := NewMemStore()
+			seedCatalogPrice(t, store, "price1", "price_ref_1")
+			s := newService(t, store, p)
 			sub, err := s.Subscribe(context.Background(), "acme", "c1", "cus_1", "price1", "price_ref_1", 2, profile, "")
 			if err != nil {
 				t.Fatalf("Subscribe: %v", err)

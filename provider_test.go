@@ -122,6 +122,7 @@ func TestService_ChargeSealsSecretIdempotentlyAndReveals(t *testing.T) {
 func TestService_SubscribePersistsFromProvider(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		s := newService(t, store, &fakeProvider{})
+		seedCatalogPrice(t, store, "price1", "price_ref_1")
 		sub, err := s.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 2, "", "")
 		if err != nil || sub.ProviderRef != "sub_1" || sub.Status != "active" || sub.Quantity != 2 {
 			t.Fatalf("subscribe: %+v %v", sub, err)

@@ -50,6 +50,7 @@ func TestSubscribe_ARetryWithTheSameKeyMakesOneSubscription(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		prov := &keyedSubscribeProvider{}
 		svc := newService(t, store, prov)
+		seedCatalogPrice(t, store, "price1", "price_ref_1")
 		first, err := svc.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 2, "", "signup-1")
 		if err != nil {
 			t.Fatal(err)
@@ -88,6 +89,7 @@ func TestSubscribe_TheKeyIsThePartitions(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		prov := &keyedSubscribeProvider{}
 		svc := newService(t, store, prov)
+		seedCatalogPrice(t, store, "price1", "price_ref_1")
 		a, err := svc.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 1, "", "signup-1")
 		if err != nil {
 			t.Fatal(err)
@@ -108,6 +110,7 @@ func TestSubscribe_AnUnkeyedCallHandsTheProviderNoKey(t *testing.T) {
 	eachStore(t, func(t *testing.T, store Store) {
 		prov := &keyedSubscribeProvider{}
 		svc := newService(t, store, prov)
+		seedCatalogPrice(t, store, "price1", "price_ref_1")
 		for i := 0; i < 2; i++ {
 			if _, err := svc.Subscribe(ctx, "acme", "c1", "cus_1", "price1", "price_ref_1", 1, "", ""); err != nil {
 				t.Fatal(err)
@@ -126,6 +129,7 @@ func TestSubscribeItems_ARetryWithTheSameKeyMakesOneSubscription(t *testing.T) {
 		catalogWithTwoPrices(t, store)
 		prov := &keyedSubscribeProvider{}
 		svc := newService(t, store, prov)
+		seedCatalogPrice(t, store, "price1", "price_ref_1")
 		asked := []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 3}}
 		first, firstItems, err := svc.SubscribeItems(ctx, "acme", "c2", "cus_2", asked, "bp_1", "plan-change-7")
 		if err != nil {
