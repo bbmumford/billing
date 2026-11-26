@@ -147,8 +147,11 @@ type Store interface {
 	RemovePaymentMethod(ctx context.Context, partition, id string) error
 
 	// ── Discounts ──
-	// UpsertDiscount inserts or replaces a catalogue discount (the out-of-band sync/seed path that mirrors
-	// a provider coupon into the local catalogue). current_uses is preserved by the apply path, not this.
+	// UpsertDiscount inserts a catalogue discount or rewrites the one its partition holds under the id
+	// (the out-of-band sync/seed path that mirrors a provider coupon into the local catalogue). An id
+	// another partition holds answers ErrDiscountPartition and changes nothing, so a write never moves a
+	// discount, its uses or its limit to another partition. A rewrite keeps the uses taken (current_uses
+	// is the apply path's to move); an insert stores d.CurrentUses.
 	UpsertDiscount(ctx context.Context, d *Discount) error
 	// GetDiscount reads a catalogue discount by id within the partition; ErrDiscountNotFound when absent.
 	GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error)

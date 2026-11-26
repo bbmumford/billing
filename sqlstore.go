@@ -780,14 +780,25 @@ func (s *SQLStore) UpsertDiscount(ctx context.Context, d *Discount) error {
 	if d.DiscountID == "" {
 		d.DiscountID = randomID()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_discounts
+	// The update's WHERE keeps a row to the partition that holds it: an id another partition
+	// holds changes no row, and the zero count is the refusal.
+	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_discounts
 		(discount_id, partition, code, name, type, value, applies_to, max_uses, current_uses, active)
 		VALUES (?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(discount_id) DO UPDATE SET partition=excluded.partition, code=excluded.code,
+		ON CONFLICT(discount_id) DO UPDATE SET code=excluded.code,
 		name=excluded.name, type=excluded.type, value=excluded.value, applies_to=excluded.applies_to,
-		max_uses=excluded.max_uses, active=excluded.active`,
+		max_uses=excluded.max_uses, active=excluded.active
+		WHERE billing_discounts.partition = excluded.partition`,
 		d.DiscountID, d.Partition, d.Code, d.Name, d.Type, d.Value, d.AppliesTo, d.MaxUses, d.CurrentUses, boolInt(d.Active))
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrDiscountPartition
+	}
+	return nil
 }
 
 func (s *SQLStore) GetDiscount(ctx context.Context, partition, discountID string) (*Discount, error) {

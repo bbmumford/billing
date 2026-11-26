@@ -729,6 +729,12 @@ func (m *MemStore) UpsertDiscount(_ context.Context, d *Discount) error {
 		d.DiscountID = m.newID()
 	}
 	cp := *d
+	if have, ok := m.discounts[d.DiscountID]; ok {
+		if have.Partition != d.Partition {
+			return ErrDiscountPartition
+		}
+		cp.CurrentUses = have.CurrentUses
+	}
 	m.discounts[d.DiscountID] = &cp
 	return nil
 }

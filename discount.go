@@ -46,6 +46,12 @@ var ErrDiscountInactive = errors.New("billing: discount is inactive")
 // already recorded — callers map it to an idempotent success.
 var ErrDiscountAlreadyApplied = errors.New("billing: discount already applied")
 
+// ErrDiscountPartition is Store.UpsertDiscount's refusal of a discount id
+// another partition holds; nothing is written. The id is the provider coupon
+// reference and the table's key, so an upsert that took the row over would move
+// the discount, its uses and its limit out of the partition that holds them.
+var ErrDiscountPartition = errors.New("billing: the discount id is held by another partition")
+
 // ErrDiscountExhausted is RecordAppliedDiscount's and ApplyDiscount's refusal
 // of a use past a discount's MaxUses; nothing is recorded and the provider is
 // not asked to attach the coupon.
