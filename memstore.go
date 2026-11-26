@@ -388,9 +388,12 @@ func (m *MemStore) ListInvoicesByCustomer(_ context.Context, partition, customer
 	return out, nil
 }
 
-func (m *MemStore) ListInvoiceItems(_ context.Context, invoiceID string) ([]*InvoiceItem, error) {
+func (m *MemStore) ListInvoiceItems(_ context.Context, partition, invoiceID string) ([]*InvoiceItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if inv, ok := m.invoices[invoiceID]; !ok || !partitionMatch(partition, inv.Partition) {
+		return nil, nil
+	}
 	var out []*InvoiceItem
 	for _, it := range m.invoiceItems {
 		if it.InvoiceID == invoiceID {

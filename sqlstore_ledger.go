@@ -92,9 +92,11 @@ func (s *SQLStore) ListInvoicesByCustomer(ctx context.Context, partition, custom
 	return out, rows.Err()
 }
 
-func (s *SQLStore) ListInvoiceItems(ctx context.Context, invoiceID string) ([]*InvoiceItem, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, invoice_id, product_id, description, quantity,
-		unit_amount_cents, amount_cents, metadata FROM billing_invoice_items WHERE invoice_id = ?`, invoiceID)
+func (s *SQLStore) ListInvoiceItems(ctx context.Context, partition, invoiceID string) ([]*InvoiceItem, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT it.id, it.invoice_id, it.product_id, it.description, it.quantity,
+		it.unit_amount_cents, it.amount_cents, it.metadata FROM billing_invoice_items it
+		JOIN billing_invoices i ON i.id = it.invoice_id
+		WHERE it.invoice_id = ? AND (? <> '' AND i.partition = ?)`, invoiceID, partition, partition)
 	if err != nil {
 		return nil, err
 	}

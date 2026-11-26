@@ -99,7 +99,9 @@ type Store interface {
 	CreateInvoice(ctx context.Context, inv *Invoice, items []*InvoiceItem) error
 	GetInvoice(ctx context.Context, partition, id string) (*Invoice, error)
 	ListInvoicesByCustomer(ctx context.Context, partition, customerID string) ([]*Invoice, error)
-	ListInvoiceItems(ctx context.Context, invoiceID string) ([]*InvoiceItem, error)
+	// ListInvoiceItems answers the lines of the partition's invoice, none for an invoice the partition
+	// does not hold: the lines carry no partition of their own, so the invoice they belong to decides.
+	ListInvoiceItems(ctx context.Context, partition, invoiceID string) ([]*InvoiceItem, error)
 	// UpdateInvoiceStatus writes the partition's invoice's status and amount paid, and its paid
 	// instant once when the status is paid; ErrNotFound when the partition holds no invoice with
 	// that id. A status the stored one does not lead to in the invoice lifecycle

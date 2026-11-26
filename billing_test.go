@@ -66,7 +66,7 @@ func TestInvoice_WithItemsAndPaidStatus(t *testing.T) {
 		if err := s.CreateInvoice(ctx, inv, items); err != nil {
 			t.Fatal(err)
 		}
-		its, _ := s.ListInvoiceItems(ctx, inv.ID)
+		its, _ := s.ListInvoiceItems(ctx, inv.Partition, inv.ID)
 		if len(its) != 1 || its[0].AmountCents != 3000 || its[0].InvoiceID != inv.ID {
 			t.Fatalf("items: %+v", its)
 		}
