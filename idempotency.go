@@ -8,15 +8,17 @@ import (
 	"strings"
 )
 
-// ErrIdempotencyKeyRequired is Charge's refusal of a request with no idempotency key, and the
-// stores' refusal of a ledger row with none; nothing is written and the provider is not asked.
+// ErrIdempotencyKeyRequired is Charge's refusal of a request with no idempotency key, the
+// stores' refusal of a ledger row with none, and Store.RecordUsage's of a usage record with
+// neither a key nor an ID; nothing is written and the provider is not asked.
 // The key is what lets a retried charge find the one already made, so without it every retry
 // would create another provider payment intent. The billing host's CreatePaymentIntent answers
 // the same refusal before it reads anything.
 var ErrIdempotencyKeyRequired = errors.New("billing: idempotency key required")
 
 // ErrIdempotencyConflict is Charge's refusal of a request whose key the partition's ledger
-// already holds for a charge to another customer, of another amount or in another currency.
+// already holds for a charge to another customer, of another amount or in another currency, and
+// Store.RecordUsage's of a usage key the partition holds for another customer, product or quantity.
 // Neither the stored row nor its client secret is answered: a key reused for a different
 // charge would otherwise hand the caller the secret that confirms a payment it did not ask for.
 var ErrIdempotencyConflict = errors.New("billing: idempotency key reused for a different charge")
@@ -34,6 +36,21 @@ func providerIdempotencyKey(operation, partition, key string) string {
 	if key == "" {
 		return ""
 	}
+	return "billing-" + operation + "-" + keyDigest(operation, partition, key)
+}
+
+// usageRecordID is the ID Store.RecordUsage gives a usage record from its partition and
+// idempotency key, "usage-" and the hex digest of both (keyDigest): one report and its retries
+// share it, so the record's primary key holds a retry to one row, and two partitions' reports
+// under one key are two rows.
+func usageRecordID(partition, key string) string {
+	return "usage-" + keyDigest("usage", partition, key)
+}
+
+// keyDigest is the hex SHA-256 of an operation, a partition and a caller's key, each
+// length-prefixed so no two triples share bytes; providerIdempotencyKey and usageRecordID are its
+// callers.
+func keyDigest(operation, partition, key string) string {
 	h := sha256.New()
 	for _, field := range []string{operation, partition, key} {
 		var n [8]byte
@@ -41,7 +58,14 @@ func providerIdempotencyKey(operation, partition, key string) string {
 		h.Write(n[:])
 		h.Write([]byte(field))
 	}
-	return "billing-" + operation + "-" + hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// sameUsage reports whether a stored usage record is the report u retries: the same customer,
+// product and quantity. RecordUsage answers the stored record for a retried key only when it is,
+// and ErrIdempotencyConflict otherwise.
+func sameUsage(stored, u *UsageRecord) bool {
+	return stored.CustomerID == u.CustomerID && stored.ProductID == u.ProductID && stored.Quantity == u.Quantity
 }
 
 // sameCharge reports whether a stored ledger row records the charge req asks for: the same

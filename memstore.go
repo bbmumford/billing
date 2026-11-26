@@ -499,8 +499,20 @@ func (m *MemStore) RecordUsage(_ context.Context, u *UsageRecord) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if u.IdempotencyKey != "" {
+		u.ID = usageRecordID(u.Partition, u.IdempotencyKey)
+		for _, have := range m.usage {
+			if have.ID == u.ID {
+				if !sameUsage(have, u) {
+					return ErrIdempotencyConflict
+				}
+				u.Metadata, u.RecordedAt = cloneUsage(have).Metadata, have.RecordedAt
+				return nil
+			}
+		}
+	}
 	if u.ID == "" {
-		u.ID = m.newID()
+		return ErrIdempotencyKeyRequired
 	}
 	if u.RecordedAt.IsZero() {
 		u.RecordedAt = m.now()

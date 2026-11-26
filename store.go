@@ -128,6 +128,11 @@ type Store interface {
 	ListPaymentsByCustomer(ctx context.Context, partition, customerID string) ([]*PaymentLedgerRow, error)
 
 	// ── Usage ──
+	// RecordUsage stores a usage record. One with an IdempotencyKey is stored under the ID derived from
+	// its partition and key (usageRecordID): a retry of the report is answered the stored record (its
+	// RecordedAt and Metadata written onto u) and stores nothing, and another report under the key
+	// (another customer, product or quantity) answers ErrIdempotencyConflict. One with neither a key
+	// nor an ID answers ErrIdempotencyKeyRequired, so no retry of an unkeyed report counts twice.
 	RecordUsage(ctx context.Context, u *UsageRecord) error
 	SummarizeUsage(ctx context.Context, partition, customerID string, from, to time.Time) ([]*UsageSummary, error)
 

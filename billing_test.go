@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -107,12 +108,12 @@ func TestPaymentLedger_IdempotentRecordAndStatus(t *testing.T) {
 func TestUsage_SummarizeWindow(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		for i, q := range []int64{5, 10, 3} {
-			if err := s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)}); err != nil {
+			if err := s.RecordUsage(ctx, &UsageRecord{IdempotencyKey: fmt.Sprint("ev", i), Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: q, RecordedAt: at.Add(time.Duration(i) * time.Minute)}); err != nil {
 				t.Fatalf("s.RecordUsage: %v", err)
 			}
 		}
 		// one record outside the window must not count
-		if err := s.RecordUsage(ctx, &UsageRecord{Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)}); err != nil {
+		if err := s.RecordUsage(ctx, &UsageRecord{IdempotencyKey: "ev-late", Partition: "acme", CustomerID: "c1", ProductID: "api", Quantity: 99, RecordedAt: at.Add(time.Hour)}); err != nil {
 			t.Fatalf("s.RecordUsage: %v", err)
 		}
 		sum, _ := s.SummarizeUsage(ctx, "acme", "c1", at, at.Add(10*time.Minute))

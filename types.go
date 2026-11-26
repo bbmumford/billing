@@ -170,15 +170,18 @@ type PaymentLedgerRow struct {
 }
 
 // UsageRecord is a metered-usage event for a customer + product; usage-based billing sums these over a
-// period. Metadata is opaque.
+// period. Metadata is opaque. IdempotencyKey is the reporter's key for the event: Store.RecordUsage
+// derives the record's ID from the partition and it, so a retried report is stored once. A record
+// carries a key or an ID of its own; one with neither is refused (ErrIdempotencyKeyRequired).
 type UsageRecord struct {
-	ID         string
-	Partition  string
-	CustomerID string
-	ProductID  string
-	Quantity   int64
-	Metadata   map[string]string
-	RecordedAt time.Time
+	ID             string
+	IdempotencyKey string
+	Partition      string
+	CustomerID     string
+	ProductID      string
+	Quantity       int64
+	Metadata       map[string]string
+	RecordedAt     time.Time
 }
 
 // UsageSummary aggregates a customer+product's usage over a queried window.

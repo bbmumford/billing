@@ -264,16 +264,45 @@ func (s *SQLStore) RecordUsage(ctx context.Context, u *UsageRecord) error {
 	if u.Partition == "" {
 		return ErrNoPartition
 	}
+	if u.IdempotencyKey != "" {
+		u.ID = usageRecordID(u.Partition, u.IdempotencyKey)
+	}
 	if u.ID == "" {
-		u.ID = randomID()
+		return ErrIdempotencyKeyRequired
 	}
 	if u.RecordedAt.IsZero() {
 		u.RecordedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
-		(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+	if u.IdempotencyKey == "" {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
+			(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+			u.ID, u.Partition, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO billing_usage
+		(id, partition, customer_id, product_id, quantity, metadata, recorded_at) VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO NOTHING`,
 		u.ID, u.Partition, u.CustomerID, u.ProductID, u.Quantity, jsonMap(u.Metadata), tnanos(u.RecordedAt))
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 1 {
+		return err
+	}
+	// The key's record is already stored: a retry is answered it, another report under the key refused.
+	var stored UsageRecord
+	var meta string
+	var at int64
+	if err := s.db.QueryRowContext(ctx, `SELECT customer_id, product_id, quantity, metadata, recorded_at
+		FROM billing_usage WHERE id = ? AND partition = ?`, u.ID, u.Partition).Scan(
+		&stored.CustomerID, &stored.ProductID, &stored.Quantity, &meta, &at); err != nil {
+		return err
+	}
+	if !sameUsage(&stored, u) {
+		return ErrIdempotencyConflict
+	}
+	u.Metadata, u.RecordedAt = readMap(meta), fromNanos(at)
+	return nil
 }
 
 func (s *SQLStore) SummarizeUsage(ctx context.Context, partition, customerID string, from, to time.Time) ([]*UsageSummary, error) {
