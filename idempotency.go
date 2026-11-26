@@ -29,7 +29,7 @@ var ErrIdempotencyConflict = errors.New("billing: idempotency key reused for a d
 // second answered with the first's intent or refused; the derived key keeps each partition's
 // retries to itself, keeps an operation's keys apart from another's, and names no partition to
 // the provider. An empty key answers "", which asks the provider for no deduplication.
-// Charge and Subscribe hand it to the provider.
+// Charge, Subscribe, SubscribeItems and ApplyDiscount hand it to the provider.
 func providerIdempotencyKey(operation, partition, key string) string {
 	if key == "" {
 		return ""

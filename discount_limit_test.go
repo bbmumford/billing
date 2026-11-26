@@ -191,6 +191,11 @@ func TestApplyDiscount_TakesTheUseBeforeTheProviderAttach(t *testing.T) {
 		if err := s.CreateCustomer(ctx, cust); err != nil {
 			t.Fatal(err)
 		}
+		for _, ref := range []string{"s_fails", "s1", "s2"} {
+			if err := s.CreateSubscription(ctx, &Subscription{Partition: "p1", CustomerID: cust.ID, PriceID: "price", ProviderRef: ref, Status: "active", Quantity: 1}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		upsertLimited(t, s, "cpn_once", 1)
 		prov := &attachingProvider{fail: map[string]bool{"s_fails": true}}
 		svc := newService(t, s, prov)
