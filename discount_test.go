@@ -7,17 +7,17 @@ import "testing"
 // current_uses bump.
 func TestDiscount_CatalogueApplyIdempotencyAndPartition(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
-		d := &Discount{DiscountID: "cpn_10", Partition: "p1", Type: "percentage", Value: 10, Active: true}
+		d := &Discount{DiscountID: "cpn_10", Partition: CatalogPartition, Type: "percentage", Value: 10, Active: true}
 		if err := s.UpsertDiscount(ctx, d); err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
-		if got, err := s.GetDiscount(ctx, "p1", "cpn_10"); err != nil || got.Value != 10 || !got.Active {
+		if got, err := s.GetDiscount(ctx, CatalogPartition, "cpn_10"); err != nil || got.Value != 10 || !got.Active {
 			t.Fatalf("get: %+v err=%v", got, err)
 		}
 		if _, err := s.GetDiscount(ctx, "p2", "cpn_10"); err != ErrDiscountNotFound {
-			t.Fatalf("cross-partition get must be ErrDiscountNotFound, got %v", err)
+			t.Fatalf("a partition reads the catalog only through CatalogPartition, so p2's own read must be ErrDiscountNotFound, got %v", err)
 		}
-		if _, err := s.GetDiscount(ctx, "p1", "nope"); err != ErrDiscountNotFound {
+		if _, err := s.GetDiscount(ctx, CatalogPartition, "nope"); err != ErrDiscountNotFound {
 			t.Fatalf("missing get must be ErrDiscountNotFound, got %v", err)
 		}
 
@@ -30,7 +30,7 @@ func TestDiscount_CatalogueApplyIdempotencyAndPartition(t *testing.T) {
 		if applied, _ := s.IsDiscountApplied(ctx, "p1", "sub_1", "cpn_10"); !applied {
 			t.Fatal("should be applied")
 		}
-		if got, _ := s.GetDiscount(ctx, "p1", "cpn_10"); got.CurrentUses != 1 {
+		if got, _ := s.GetDiscount(ctx, CatalogPartition, "cpn_10"); got.CurrentUses != 1 {
 			t.Fatalf("current_uses want 1, got %d", got.CurrentUses)
 		}
 		if _, err := s.RecordAppliedDiscount(ctx, "p1", "sub_1", "cpn_10"); err != ErrDiscountAlreadyApplied {

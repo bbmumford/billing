@@ -163,6 +163,9 @@ func (m *MemStore) CreateProduct(_ context.Context, p *Product) error {
 	if p.Partition == "" {
 		return ErrNoPartition
 	}
+	if p.Partition != CatalogPartition {
+		return ErrCatalogPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p.ID == "" {
@@ -207,6 +210,9 @@ func (m *MemStore) CreatePrice(_ context.Context, p *Price) error {
 	if p.Partition == "" {
 		return ErrNoPartition
 	}
+	if p.Partition != CatalogPartition {
+		return ErrCatalogPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if p.ID == "" {
@@ -246,6 +252,9 @@ func (m *MemStore) ListPrices(_ context.Context, partition, productID string) ([
 }
 
 func (m *MemStore) SetPriceProviderRef(_ context.Context, partition, id, providerRef string) error {
+	if partition != CatalogPartition {
+		return ErrCatalogPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.prices[id]
@@ -723,6 +732,9 @@ func (m *MemStore) UpsertDiscount(_ context.Context, d *Discount) error {
 	if d.Partition == "" {
 		return ErrNoPartition
 	}
+	if d.Partition != CatalogPartition {
+		return ErrCatalogPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if d.DiscountID == "" {
@@ -766,9 +778,12 @@ func (m *MemStore) IsDiscountApplied(_ context.Context, partition, subscriptionR
 
 // RecordAppliedDiscount is the reference behaviour SQLStore's is held to: under
 // the store's lock, the pair is refused when recorded, the discount when the
-// partition holds none or it has reached MaxUses, and otherwise the use is taken
+// catalog holds none or it has reached MaxUses, and otherwise the use is taken
 // and the pair recorded together.
 func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error) {
+	if partition == "" {
+		return nil, ErrNoPartition
+	}
 	if discountID == "" {
 		return nil, ErrNotFound
 	}
@@ -778,7 +793,7 @@ func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscript
 		return nil, ErrDiscountAlreadyApplied
 	}
 	d, ok := m.discounts[discountID]
-	if !ok || !partitionMatch(partition, d.Partition) {
+	if !ok || d.Partition != CatalogPartition {
 		return nil, ErrDiscountNotFound
 	}
 	if d.MaxUses > 0 && d.CurrentUses >= d.MaxUses {
@@ -800,8 +815,11 @@ func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscript
 func (m *MemStore) ReleaseAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if partition == "" {
+		return ErrNoPartition
+	}
 	d, ok := m.discounts[discountID]
-	if !ok || !partitionMatch(partition, d.Partition) {
+	if !ok || d.Partition != CatalogPartition {
 		d = nil
 	}
 	if subscriptionRef != "" {

@@ -161,7 +161,6 @@ func TestService_SubscribeItemsRefusesWhatTheProviderCannotBeAsked(t *testing.T)
 		{"quantity zero", "acme", []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 0}}, ErrInvalidSubscriptionItem},
 		{"price twice", "acme", []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_plan", Quantity: 2}}, ErrInvalidSubscriptionItem},
 		{"price outside the catalog", "acme", []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_nowhere", Quantity: 1}}, ErrNotFound},
-		{"another partition", "other", []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_addon", Quantity: 1}}, ErrNotFound},
 		{"no provider price", "acme", []SubscriptionItem{{PriceID: "p_plan", Quantity: 1}, {PriceID: "p_unsold", Quantity: 1}}, ErrNoProviderPrice},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -16,11 +16,11 @@ func TestProductAndPriceMetadataRoundTrip(t *testing.T) {
 			ctx := context.Background()
 			meta := map[string]string{"role": "worker_addon", "canonical_id": "prod_canonical", "adr": "0024"}
 
-			p := &Product{ID: "prod1", Partition: "p1", ServiceID: "svc", Name: "Addon", Metadata: meta}
+			p := &Product{ID: "prod1", Partition: CatalogPartition, ServiceID: "svc", Name: "Addon", Metadata: meta}
 			if err := st.CreateProduct(ctx, p); err != nil {
 				t.Fatalf("CreateProduct: %v", err)
 			}
-			got, err := st.GetProduct(ctx, "p1", "prod1")
+			got, err := st.GetProduct(ctx, CatalogPartition, "prod1")
 			if err != nil {
 				t.Fatalf("GetProduct: %v", err)
 			}
@@ -30,12 +30,12 @@ func TestProductAndPriceMetadataRoundTrip(t *testing.T) {
 				}
 			}
 
-			pr := &Price{ID: "price1", Partition: "p1", ProductID: "prod1", Currency: "usd",
+			pr := &Price{ID: "price1", Partition: CatalogPartition, ProductID: "prod1", Currency: "usd",
 				AmountCents: 1000, Interval: "month", Metadata: map[string]string{"lookup": "worker_monthly"}}
 			if err := st.CreatePrice(ctx, pr); err != nil {
 				t.Fatalf("CreatePrice: %v", err)
 			}
-			gotPr, err := st.GetPrice(ctx, "p1", "price1")
+			gotPr, err := st.GetPrice(ctx, CatalogPartition, "price1")
 			if err != nil {
 				t.Fatalf("GetPrice: %v", err)
 			}
@@ -51,10 +51,10 @@ func TestProductAndPriceMetadataRoundTrip(t *testing.T) {
 func TestAbsentMetadataIsSafeToRead(t *testing.T) {
 	eachStore(t, func(t *testing.T, st Store) {
 		ctx := context.Background()
-		if err := st.CreateProduct(ctx, &Product{ID: "p", Partition: "x", Name: "n"}); err != nil {
+		if err := st.CreateProduct(ctx, &Product{ID: "p", Partition: CatalogPartition, Name: "n"}); err != nil {
 			t.Fatalf("CreateProduct: %v", err)
 		}
-		got, err := st.GetProduct(ctx, "x", "p")
+		got, err := st.GetProduct(ctx, CatalogPartition, "p")
 		if err != nil {
 			t.Fatalf("GetProduct: %v", err)
 		}

@@ -46,7 +46,7 @@ func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, cus
 	if len(items) == 0 {
 		return nil, nil, ErrNoSubscriptionItems
 	}
-	ask, byRef, err := s.catalogItems(ctx, partition, items)
+	ask, byRef, err := s.catalogItems(ctx, items)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -105,15 +105,15 @@ func (s *Service) SubscribeItems(ctx context.Context, partition, customerID, cus
 }
 
 // catalogItems checks every item a caller names and reads its provider price
-// from the partition's catalog: an item with no price id, a quantity below one
-// or a price named twice is ErrInvalidSubscriptionItem, a price the partition
-// does not hold the store's ErrNotFound, a price with no provider price
+// from the platform-wide catalog (CatalogPartition): an item with no price id, a
+// quantity below one or a price named twice is ErrInvalidSubscriptionItem, a
+// price the catalog does not hold the store's ErrNotFound, a price with no provider price
 // ErrNoProviderPrice. It answers the items with PriceRef filled, in the order
 // given, and the catalog price id of each provider price asked for, which maps
 // the provider's answer back. Service.SubscribeItems and
 // Service.UpdateSubscription read it before the provider is asked, so neither
-// asks the provider for a price the partition cannot sell.
-func (s *Service) catalogItems(ctx context.Context, partition string, items []SubscriptionItem) ([]SubscriptionItem, map[string]string, error) {
+// asks the provider for a price the catalog does not sell.
+func (s *Service) catalogItems(ctx context.Context, items []SubscriptionItem) ([]SubscriptionItem, map[string]string, error) {
 	ask := make([]SubscriptionItem, 0, len(items))
 	byRef := map[string]string{}
 	seen := map[string]bool{}
@@ -122,7 +122,7 @@ func (s *Service) catalogItems(ctx context.Context, partition string, items []Su
 			return nil, nil, ErrInvalidSubscriptionItem
 		}
 		seen[it.PriceID] = true
-		price, err := s.store.GetPrice(ctx, partition, it.PriceID)
+		price, err := s.store.GetPrice(ctx, CatalogPartition, it.PriceID)
 		if err != nil {
 			return nil, nil, err
 		}

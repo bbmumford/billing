@@ -50,15 +50,15 @@ func (s *itemWritingStore) UpdateSubscriptionItems(c context.Context, partition,
 	return s.MemStore.UpdateSubscriptionItems(c, partition, id, items)
 }
 
-// catalogWithTwoPrices stores the partition's plan price p_plan (provider
+// catalogWithTwoPrices stores the catalog's plan price p_plan (provider
 // price_plan) and add-on price p_addon (provider price_addon), and a customer c1
 // with an active subscription on p_plan, quantity 1, provider ref sub_9.
 func catalogWithTwoPrices(t *testing.T, s Store) *Subscription {
 	t.Helper()
 	for _, p := range []*Price{
-		{ID: "p_plan", Partition: "acme", ProductID: "prod_plan", ProviderRef: "price_plan", Currency: "usd", AmountCents: 1000},
-		{ID: "p_addon", Partition: "acme", ProductID: "prod_addon", ProviderRef: "price_addon", Currency: "usd", AmountCents: 500},
-		{ID: "p_unsold", Partition: "acme", ProductID: "prod_unsold", Currency: "usd", AmountCents: 1},
+		{ID: "p_plan", Partition: CatalogPartition, ProductID: "prod_plan", ProviderRef: "price_plan", Currency: "usd", AmountCents: 1000},
+		{ID: "p_addon", Partition: CatalogPartition, ProductID: "prod_addon", ProviderRef: "price_addon", Currency: "usd", AmountCents: 500},
+		{ID: "p_unsold", Partition: CatalogPartition, ProductID: "prod_unsold", Currency: "usd", AmountCents: 1},
 	} {
 		if err := s.CreatePrice(ctx, p); err != nil {
 			t.Fatalf("CreatePrice(%s): %v", p.ID, err)

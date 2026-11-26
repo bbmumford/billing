@@ -12,14 +12,14 @@ import (
 
 func upsertLimited(t *testing.T, s Store, id string, maxUses int64) {
 	t.Helper()
-	if err := s.UpsertDiscount(ctx, &Discount{DiscountID: id, Partition: "p1", Type: "percentage", Value: 10, MaxUses: maxUses, Active: true}); err != nil {
+	if err := s.UpsertDiscount(ctx, &Discount{DiscountID: id, Partition: CatalogPartition, Type: "percentage", Value: 10, MaxUses: maxUses, Active: true}); err != nil {
 		t.Fatalf("UpsertDiscount: %v", err)
 	}
 }
 
 func usesOf(t *testing.T, s Store, id string) int64 {
 	t.Helper()
-	d, err := s.GetDiscount(ctx, "p1", id)
+	d, err := s.GetDiscount(ctx, CatalogPartition, id)
 	if err != nil {
 		t.Fatalf("GetDiscount: %v", err)
 	}
@@ -58,8 +58,8 @@ func TestRecordAppliedDiscount_TheUseLimitIsHeld(t *testing.T) {
 	})
 }
 
-// A customer-wide use (no subscription) counts against the limit and records no pair; the
-// partition's discount is the only one a use is taken from.
+// A customer-wide use (no subscription) counts against the limit and records no pair; each
+// partition's application of the catalog's discount is its own.
 func TestRecordAppliedDiscount_CustomerWideUsesCountAndPartitionsAreApart(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		upsertLimited(t, s, "cpn_two", 2)
@@ -78,14 +78,14 @@ func TestRecordAppliedDiscount_CustomerWideUsesCountAndPartitionsAreApart(t *tes
 			t.Fatalf("CurrentUses = %d, want 2", got)
 		}
 		upsertLimited(t, s, "cpn_p1", 0)
-		if _, err := s.RecordAppliedDiscount(ctx, "p2", "s1", "cpn_p1"); !errors.Is(err, ErrDiscountNotFound) {
-			t.Fatalf("another partition's use = %v, want ErrDiscountNotFound", err)
+		if _, err := s.RecordAppliedDiscount(ctx, "p2", "s1", "cpn_p1"); err != nil {
+			t.Fatalf("p2's use of the catalog's discount = %v", err)
 		}
-		if applied, _ := s.IsDiscountApplied(ctx, "p2", "s1", "cpn_p1"); applied {
-			t.Fatal("another partition's refused use recorded a pair")
+		if applied, _ := s.IsDiscountApplied(ctx, "p1", "s1", "cpn_p1"); applied {
+			t.Fatal("p1 sees p2's application")
 		}
-		if got := usesOf(t, s, "cpn_p1"); got != 0 {
-			t.Fatalf("p1's CurrentUses after p2's use = %d, want 0", got)
+		if applied, _ := s.IsDiscountApplied(ctx, "p2", "s1", "cpn_p1"); !applied {
+			t.Fatal("p2's application was not recorded")
 		}
 	})
 }

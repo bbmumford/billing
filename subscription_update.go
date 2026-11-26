@@ -94,7 +94,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, partition, id string, 
 	if !ok {
 		return nil, nil, ErrProviderUnsupported
 	}
-	ask, byRef, err := s.catalogItems(ctx, partition, items)
+	ask, byRef, err := s.catalogItems(ctx, items)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -126,7 +126,7 @@ func (s *Service) UpdateSubscription(ctx context.Context, partition, id string, 
 	return row, stored, nil
 }
 
-// priceIDOfProviderRef answers the catalog price in the partition whose provider
+// priceIDOfProviderRef answers the catalog price whose provider
 // reference is ref, looking among the prices of the subscription's stored items
 // and the row's own price: the prices a provider answer can name that the
 // request did not. ErrProviderItemsUnresolved when none of them is it.
@@ -146,7 +146,7 @@ func (s *Service) priceIDOfProviderRef(ctx context.Context, partition string, su
 		candidates = append(candidates, sub.PriceID)
 	}
 	for _, priceID := range candidates {
-		price, err := s.store.GetPrice(ctx, partition, priceID)
+		price, err := s.store.GetPrice(ctx, CatalogPartition, priceID)
 		if errors.Is(err, ErrNotFound) {
 			continue
 		}

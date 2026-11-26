@@ -9,9 +9,10 @@ import (
 // Discount is a catalogue entry that mirrors a provider coupon / promotion code.
 // DiscountID doubles as the provider coupon id — the apply path attaches it
 // directly. Value is a percent (5.0 = 5%) for Type "percentage" or an amount in
-// cents for "fixed_amount". Partition is the opaque scope the store filters on;
-// "" is a global/all-scope discount. The catalogue is populated out of band
-// (mirrored from the provider); billing only reads it here.
+// cents for "fixed_amount". Partition is CatalogPartition: a discount is a
+// platform-wide catalog row every partition applies, and the stores refuse one
+// under any other partition (ErrCatalogPartition). The catalogue is populated
+// out of band (mirrored from the provider); billing only reads it here.
 type Discount struct {
 	DiscountID  string
 	Partition   string
@@ -119,7 +120,8 @@ type ApplyDiscountResult struct {
 	NewSubtotalCents   int32
 }
 
-// ApplyDiscount validates the catalogue discount, enforces subscription-scoped
+// ApplyDiscount validates the discount, read from the platform-wide catalog
+// (CatalogPartition) whatever the partition, enforces subscription-scoped
 // idempotency, takes a use of the discount and records the application
 // (Store.RecordAppliedDiscount), then attaches the provider coupon. It is
 // idempotent: a repeat for an already-applied (subscription, discount) returns
@@ -132,7 +134,7 @@ type ApplyDiscountResult struct {
 // TODO: a release that fails after a refused attach keeps the use and the
 // pair, so a retry answers AlreadyApplied with no coupon at the provider.
 func (s *Service) ApplyDiscount(ctx context.Context, partition, customerID, subscriptionRef, discountID, idempotencyKey string) (ApplyDiscountResult, error) {
-	d, err := s.store.GetDiscount(ctx, partition, discountID)
+	d, err := s.store.GetDiscount(ctx, CatalogPartition, discountID)
 	if err != nil {
 		return ApplyDiscountResult{}, err
 	}
