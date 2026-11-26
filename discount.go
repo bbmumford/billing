@@ -28,7 +28,8 @@ type Discount struct {
 
 // AppliedDiscount records that a discount was attached to a subscription — the
 // idempotency anchor for ApplyDiscount. SubscriptionRef is the opaque provider
-// subscription reference the caller supplied.
+// subscription reference the caller supplied, or for a customer-wide
+// application the reference naming the customer (customerWideRef).
 type AppliedDiscount struct {
 	ID              string
 	Partition       string
@@ -115,6 +116,14 @@ func ComputeDiscountAmountCents(d *Discount, subtotalCents int64) int64 {
 	}
 }
 
+// customerWideRef is the reference a customer-wide application is recorded
+// under in billing_applied_discounts: "customer:" and the customer's record id,
+// which no provider subscription reference shares. ApplyDiscount records and
+// releases a customer-wide use under it, so that use, like a subscription's, is
+// given back only against the record of its taking, and a repeat answers
+// AlreadyApplied.
+func customerWideRef(customerID string) string { return "customer:" + customerID }
+
 // ApplyDiscountResult reports the outcome of an apply. AlreadyApplied is true when
 // the (subscription, discount) pair was already recorded. The amount fields are
 // populated only when a subtotal is supplied to a future amount-aware caller;
@@ -183,7 +192,18 @@ func (s *Service) ApplyDiscount(ctx context.Context, partition, customerID, subs
 	if subscriptionRef == "" && cust.ProviderRef == "" {
 		return ApplyDiscountResult{}, errors.New("billing: customer has no provider account for a customer-wide discount")
 	}
-	if _, err := s.store.RecordAppliedDiscount(ctx, partition, subscriptionRef, discountID); err != nil {
+	applied := subscriptionRef
+	if applied == "" {
+		applied = customerWideRef(customerID)
+		already, err := s.store.IsDiscountApplied(ctx, partition, applied, discountID)
+		if err != nil {
+			return ApplyDiscountResult{}, err
+		}
+		if already {
+			return ApplyDiscountResult{AlreadyApplied: true}, nil
+		}
+	}
+	if _, err := s.store.RecordAppliedDiscount(ctx, partition, applied, discountID); err != nil {
 		if errors.Is(err, ErrDiscountAlreadyApplied) {
 			return ApplyDiscountResult{AlreadyApplied: true}, nil
 		}
@@ -195,7 +215,7 @@ func (s *Service) ApplyDiscount(ctx context.Context, partition, customerID, subs
 		CouponRef:       discountID,
 		IdempotencyKey:  providerIdempotencyKey("discount", partition, idempotencyKey),
 	}); err != nil {
-		return ApplyDiscountResult{}, errors.Join(err, s.store.ReleaseAppliedDiscount(ctx, partition, subscriptionRef, discountID))
+		return ApplyDiscountResult{}, errors.Join(err, s.store.ReleaseAppliedDiscount(ctx, partition, applied, discountID))
 	}
 	return ApplyDiscountResult{}, nil
 }

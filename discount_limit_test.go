@@ -58,17 +58,17 @@ func TestRecordAppliedDiscount_TheUseLimitIsHeld(t *testing.T) {
 	})
 }
 
-// A customer-wide use (no subscription) counts against the limit and records no pair; each
-// partition's application of the catalog's discount is its own.
+// A customer-wide use, recorded under its customer's reference, counts against the limit as a
+// subscription's does; each partition's application of the catalog's discount is its own.
 func TestRecordAppliedDiscount_CustomerWideUsesCountAndPartitionsAreApart(t *testing.T) {
 	eachStore(t, func(t *testing.T, s Store) {
 		upsertLimited(t, s, "cpn_two", 2)
 		for i := 0; i < 2; i++ {
-			if _, err := s.RecordAppliedDiscount(ctx, "p1", "", "cpn_two"); err != nil {
+			if _, err := s.RecordAppliedDiscount(ctx, "p1", customerWideRef(fmt.Sprint("c", i)), "cpn_two"); err != nil {
 				t.Fatalf("customer-wide use %d: %v", i, err)
 			}
 		}
-		if _, err := s.RecordAppliedDiscount(ctx, "p1", "", "cpn_two"); !errors.Is(err, ErrDiscountExhausted) {
+		if _, err := s.RecordAppliedDiscount(ctx, "p1", customerWideRef("c2"), "cpn_two"); !errors.Is(err, ErrDiscountExhausted) {
 			t.Fatalf("third customer-wide use = %v, want ErrDiscountExhausted", err)
 		}
 		if _, err := s.RecordAppliedDiscount(ctx, "p1", "s1", "cpn_two"); !errors.Is(err, ErrDiscountExhausted) {
@@ -113,12 +113,12 @@ func TestReleaseAppliedDiscount_GivesTheUseBack(t *testing.T) {
 		if usesOf(t, s, "cpn_once") != 1 {
 			t.Fatalf("a refused release changed the uses to %d", usesOf(t, s, "cpn_once"))
 		}
-		if _, err := s.RecordAppliedDiscount(ctx, "p1", "", "cpn_free"); !errors.Is(err, ErrDiscountNotFound) {
+		if _, err := s.RecordAppliedDiscount(ctx, "p1", "s3", "cpn_free"); !errors.Is(err, ErrDiscountNotFound) {
 			t.Fatalf("use of an absent discount = %v, want ErrDiscountNotFound", err)
 		}
 		upsertLimited(t, s, "cpn_cw", 0)
-		if err := s.ReleaseAppliedDiscount(ctx, "p1", "", "cpn_cw"); err != nil || usesOf(t, s, "cpn_cw") != 0 {
-			t.Fatalf("customer-wide release with no use taken = %v, uses %d; want nil and 0", err, usesOf(t, s, "cpn_cw"))
+		if err := s.ReleaseAppliedDiscount(ctx, "p1", "", "cpn_cw"); !errors.Is(err, ErrNotFound) || usesOf(t, s, "cpn_cw") != 0 {
+			t.Fatalf("release with no recorded use = %v, uses %d; want ErrNotFound and 0", err, usesOf(t, s, "cpn_cw"))
 		}
 	})
 }

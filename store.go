@@ -166,15 +166,16 @@ type Store interface {
 	// ErrDiscountAlreadyApplied when the pair already exists, ErrDiscountNotFound when the catalog
 	// holds no such discount, and ErrDiscountExhausted when the
 	// discount's MaxUses is above zero and current_uses has reached it; a refusal takes no use and
-	// records nothing, so concurrent applications never pass the limit. An empty subscriptionRef is a
-	// customer-wide application: it takes a use and records no pair. An empty discountID answers
-	// ErrNotFound. Service.ApplyDiscount calls it before the provider attach, so a discount at its
+	// records nothing, so concurrent applications never pass the limit. Every application is recorded
+	// under its reference: a subscription's provider reference, or for a customer-wide application the
+	// reference Service.ApplyDiscount names the customer by (customerWideRef). An empty subscriptionRef
+	// or discountID answers ErrNotFound and takes nothing. Service.ApplyDiscount calls it before the provider attach, so a discount at its
 	// limit never reaches the provider.
 	RecordAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) (*AppliedDiscount, error)
 	// ReleaseAppliedDiscount gives back the use RecordAppliedDiscount took and removes its pair, in one
-	// write: ErrNotFound when the partition holds no such pair. For an empty subscriptionRef it gives back
-	// one customer-wide use, current_uses never going below zero (ErrDiscountNotFound when the
-	// catalog holds no such discount). Service.ApplyDiscount calls it when the provider refuses the
+	// write, current_uses never going below zero: ErrNotFound when the partition holds no such pair
+	// (an empty subscriptionRef included), and then nothing is given back, so no use is returned
+	// without the record that it was taken. Service.ApplyDiscount calls it when the provider refuses the
 	// attach, so a failed attach neither spends a use nor leaves a pair that would answer a retry
 	// AlreadyApplied.
 	ReleaseAppliedDiscount(ctx context.Context, partition, subscriptionRef, discountID string) error

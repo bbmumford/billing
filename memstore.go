@@ -784,12 +784,12 @@ func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscript
 	if partition == "" {
 		return nil, ErrNoPartition
 	}
-	if discountID == "" {
+	if subscriptionRef == "" || discountID == "" {
 		return nil, ErrNotFound
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if subscriptionRef != "" && m.appliedIndex(partition, subscriptionRef, discountID) >= 0 {
+	if m.appliedIndex(partition, subscriptionRef, discountID) >= 0 {
 		return nil, ErrDiscountAlreadyApplied
 	}
 	d, ok := m.discounts[discountID]
@@ -800,38 +800,27 @@ func (m *MemStore) RecordAppliedDiscount(_ context.Context, partition, subscript
 		return nil, ErrDiscountExhausted
 	}
 	d.CurrentUses++
-	rec := &AppliedDiscount{Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
-	if subscriptionRef != "" {
-		rec.ID = m.newID()
-		m.appliedDiscounts = append(m.appliedDiscounts, rec)
-	}
+	rec := &AppliedDiscount{ID: m.newID(), Partition: partition, SubscriptionRef: subscriptionRef, DiscountID: discountID}
+	m.appliedDiscounts = append(m.appliedDiscounts, rec)
 	cp := *rec
 	return &cp, nil
 }
 
 // ReleaseAppliedDiscount is the reference behaviour SQLStore's is held to: the
-// pair removed and its use given back together, or for a customer-wide use the
-// use alone, never below zero.
+// recorded pair removed and its use given back together, never below zero, and
+// nothing given back without the pair.
 func (m *MemStore) ReleaseAppliedDiscount(_ context.Context, partition, subscriptionRef, discountID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if partition == "" {
 		return ErrNoPartition
 	}
-	d, ok := m.discounts[discountID]
-	if !ok || d.Partition != CatalogPartition {
-		d = nil
+	i := m.appliedIndex(partition, subscriptionRef, discountID)
+	if subscriptionRef == "" || i < 0 {
+		return ErrNotFound
 	}
-	if subscriptionRef != "" {
-		i := m.appliedIndex(partition, subscriptionRef, discountID)
-		if i < 0 {
-			return ErrNotFound
-		}
-		m.appliedDiscounts = append(m.appliedDiscounts[:i], m.appliedDiscounts[i+1:]...)
-	} else if d == nil {
-		return ErrDiscountNotFound
-	}
-	if d != nil && d.CurrentUses > 0 {
+	m.appliedDiscounts = append(m.appliedDiscounts[:i], m.appliedDiscounts[i+1:]...)
+	if d, ok := m.discounts[discountID]; ok && d.Partition == CatalogPartition && d.CurrentUses > 0 {
 		d.CurrentUses--
 	}
 	return nil
